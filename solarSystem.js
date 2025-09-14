@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CameraController } from './cameraController_5.js';
+import { CameraController } from './cameraController.js';
 import { Planet } from './Planet_2.js';
 
 class SolarSystemApp {
