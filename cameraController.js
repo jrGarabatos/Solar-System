@@ -24,9 +24,6 @@ export class CameraController {
     constructor(camera, domElement, options = {}) {
         this.camera = camera;
         this.domElement = domElement;
-        this.scene = options.scene;
-
-        console.log(this.scene);
 
         // ----------------------
         // Configurable options
@@ -208,7 +205,7 @@ export class CameraController {
                 // Focus on a specific moving object
                 const obj = this.focusObjects[this.focusIndex];
                 this.focusTarget = obj;   // track it
-                this.focusOn(obj, 1.0, 1.2); // smooth transition to start tracking
+                this.focusOn(obj, 1.2, 1.0); // smooth transition to start tracking
             } else {
                 // Return to starting view
                 console.log("return to start view");
@@ -221,8 +218,9 @@ export class CameraController {
         if (e.code === this.toggleKey) {
             e.preventDefault();
             this.enableOrbit = !this.enableOrbit;
-
+            
             if (!this.enableOrbit) {
+                console.log('switch to FPS');
                 // Switching to FPS mode → extract orientation from camera quaternion
                 const { pitch, yaw } = this.getPitchYawFromQuaternion(this.camera.quaternion);
                 this.pitch = pitch;
@@ -238,9 +236,9 @@ export class CameraController {
                 this.distance = distance;
             }
         }
+        console.log(`Switched to ${this.enableOrbit ? 'Orbit' : 'FPS'} mode`);
     }
 
-        
     /**
      * Handle key release
      */
@@ -419,257 +417,106 @@ export class CameraController {
     // Focus-on-object logic
     // ----------------------
     
-    
     /**
      * Smoothly move orbit target and distance to focus on an object or point.
      * Works with any Object3D (Group, Mesh, etc.) or Vector3.
+     * If target is a Group, only the first child is considered.
      * @param {THREE.Object3D|THREE.Vector3} target - Object or position to focus on
      * @param {number} duration - Transition duration in seconds
      * @param {number} distanceFactor - Padding multiplier for object size
      * @param {boolean} returnToStart - If true, interpolate back to starting view
      */
- /**
-     * Update per frame
-     */
-    update(deltaTime = 1 / 60) {
-        if (this.enableOrbit) {
-            this.orbitUpdate(deltaTime);
-        } else {
-            this.fpsUpdate(deltaTime);
-        }
+    focusOn(target, duration = 1.0, distanceFactor = 1.2, returnToStart = false) {
+        this._returningToStart = returnToStart;
 
-        this.updateFocus(deltaTime);
-    }
-
-    // ----------------------
-    // Focus-on-object logic
-    // ----------------------
-    
-    
-    /**
-     * Smoothly move orbit target and distance to focus on an object or point.
-     * Works with any Object3D (Group, Mesh, etc.) or Vector3.
-     * @param {THREE.Object3D|THREE.Vector3} target - Object or position to focus on
-     * @param {number} duration - Transition duration in seconds
-     * @param {number} distanceFactor - Padding multiplier for object size
-     * @param {boolean} returnToStart - If true, interpolate back to starting view
-     */
-    focusOn_1(target, duration = 1.0, distanceFactor = 1.2, returnToStart = false) {        
-        let targetPos, radius;
-
-        if (target instanceof THREE.Object3D) {
-            // Compute bounding sphere (center + radius) for the object/group
-            const box = new THREE.Box3().setFromObject(target);
-            const sphere = box.getBoundingSphere(new THREE.Sphere());
-
-            // Store the sphere’s center relative to the object’s local space
-            this.focusLocalCenter = target.worldToLocal(sphere.center.clone());
-
-            // Store the object’s approximate radius once
-            this.focusRadius = sphere.radius || 1;
-
-            // Initial world position for interpolation
-            targetPos = sphere.center.clone();
-            
-        } else if (target instanceof THREE.Vector3) {
-            targetPos = target.clone();
-            this.focusRadius = 1;
-        } else {
+        if (!(target instanceof THREE.Object3D || target instanceof THREE.Vector3)) {
             console.warn('focusOn: target must be Object3D or Vector3');
             return;
         }
 
-        // Compute distance required to fit object in view
-        const fov = THREE.MathUtils.degToRad(this.camera.fov);
-        const aspect = this.camera.aspect;
-        const halfFovV = Math.tan(fov / 2);
-        const halfFovH = halfFovV * aspect;
+        this.focusTarget = target;
 
-        const distV = this.focusRadius / halfFovV;
-        const distH = this.focusRadius / halfFovH;
-        const newDistance = Math.max(distV, distH) * distanceFactor;
-
-        // Save start & end states
-        this.focusStart = {
-            orbitTarget: this.orbitTarget.clone(),
-            distance: this.distance,
-            pitch: this.pitch,
-            yaw: this.yaw,
-        };
-
-        if (returnToStart) {
-            this.focusEnd = {
-                orbitTarget: this.startState.orbitTarget.clone(),
-                distance: this.startState.distance,
-                pitch: this.startState.pitch,
-                yaw: this.startState.yaw,
-            };
-            this._returningToStart = true;
-        } else {
-            this.focusEnd = {
-                orbitTarget: targetPos,
-                distance: newDistance,
-                pitch: this.pitch, // keep current orientation
-                yaw: this.yaw,
-            };
-            this._returningToStart = false;
-            this.focusTarget = target; // keep tracking if it's an Object3D
+        // Compute a suitable distance based on bounding sphere        
+        let radius = 1;
+        if (target instanceof THREE.Object3D || target instanceof THREE.Group) {
+            const firstChild = target instanceof THREE.Group ? this.getFirstRenderableChild(target) : target;
+            //const box = new THREE.Box3().setFromObject(firstChild);
+            const box = new THREE.Box3().setFromObject(target);     
+            const sphere = box.getBoundingSphere(new THREE.Sphere());
+            radius = sphere.radius || 1;
         }
 
+        const fov = THREE.MathUtils.degToRad(this.camera.fov);
+        const aspect = this.camera.aspect;
+        const distV = radius / Math.tan(fov / 2);
+        const distH = radius / (Math.tan(fov / 2) * aspect);
+        const newDistance = Math.max(distV, distH) * distanceFactor;
+
+        // --- Reset spherical coords relative to this new target ---
+        const targetPos = new THREE.Vector3();
+        if (target instanceof THREE.Object3D) {
+            target.getWorldPosition(targetPos);
+        } else {
+            targetPos.copy(target);
+        }
+
+        const offset = new THREE.Vector3().subVectors(this.camera.position, targetPos);
+        this.distance = offset.length();
+        this.pitch = Math.asin(offset.y / this.distance);
+        this.yaw = Math.atan2(offset.x, offset.z);
+
+        // --- Interpolation (optional, smooth zoom) ---
+        this.focusStart = { distance: this.distance };
+        this.focusEnd = { distance: returnToStart ? this.startState.distance : newDistance };
         this.focusDuration = duration;
         this.focusLerp = 0;
     }
 
-    updateFocus_1(deltaTime) {
-        // Transition interpolation
+
+
+    updateFocus(deltaTime) {
+        if (!this.focusTarget) return;
+
+        // --- Get target world position ---
+        let dynamicTarget = this.focusTarget;
+        if (dynamicTarget instanceof THREE.Group && dynamicTarget.children.length > 0) {
+            dynamicTarget = this.getFirstRenderableChild(dynamicTarget);
+        }
+
+        const targetPos = new THREE.Vector3();
+        if (dynamicTarget instanceof THREE.Object3D) dynamicTarget.getWorldPosition(targetPos);
+        else targetPos.copy(dynamicTarget);
+
+        // --- Smoothly interpolate distance ---
         if (this.focusEnd && this.focusLerp < 1) {
             this.focusLerp += deltaTime / this.focusDuration;
             const t = THREE.MathUtils.clamp(this.focusLerp, 0, 1);
-            const k = t * t * (3 - 2 * t);
-
-            this.orbitTarget.lerpVectors(this.focusStart.orbitTarget, this.focusEnd.orbitTarget, k);
+            const k = t * t * (3 - 2 * t); // smoothstep
             this.distance = THREE.MathUtils.lerp(this.focusStart.distance, this.focusEnd.distance, k);
-
-            if (this._returningToStart) {
-                this.pitch = THREE.MathUtils.lerp(this.focusStart.pitch, this.focusEnd.pitch, k);
-                this.yaw = THREE.MathUtils.lerp(this.focusStart.yaw, this.focusEnd.yaw, k);
-            }
 
             if (t >= 1) {
                 this.focusStart = null;
                 this.focusEnd = null;
-                this._returningToStart = false;
             }
         }
 
-        if (this.focusTarget && this.focusTarget instanceof THREE.Object3D && !this._returningToStart) {
-            const worldCenter = new THREE.Vector3();
-            this.focusTarget.getWorldPosition(worldCenter);
-
-            // Sync orbit target
-            this.orbitTarget.copy(worldCenter);
-
-            // Camera offset relative to orbital center
-            const offset = new THREE.Vector3(
-                this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
-                this.distance * Math.sin(this.pitch),
-                this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
-            );
-
-            // Apply offset in planet-centered space
-            this.camera.position.copy(worldCenter).add(offset);
-
-            // Orient camera so forward vector exactly points to planet center
-            this.camera.quaternion.setFromRotationMatrix(
-                new THREE.Matrix4().lookAt(this.camera.position, worldCenter, this.camera.up)
-            );
-        }
-
-
-    }
-
-    // ====================================0
-
-focusOn(target, duration = 1.0, distanceFactor = 1.2) {
-    if (!(target instanceof THREE.Object3D)) return;
-
-    this.focusTarget = target;
-
-    // Compute stable center relative to the planet itself
-    const box = new THREE.Box3().setFromObject(target);
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
-    this.focusRadius = sphere.radius || 1;
-
-    // Store offset from the planet's local center
-    this.focusLocalOffset = sphere.center.clone().sub(target.position);
-
-    // Compute camera distance
-    const fov = THREE.MathUtils.degToRad(this.camera.fov);
-    const aspect = this.camera.aspect;
-    const halfFovV = Math.tan(fov / 2);
-    const halfFovH = halfFovV * aspect;
-    const distV = this.focusRadius / halfFovV;
-    const distH = this.focusRadius / halfFovH;
-    this.focusDistance = Math.max(distV, distH) * distanceFactor;
-
-    // Save start & end states for smooth transition
-    this.focusStart = {
-        orbitTarget: this.orbitTarget.clone(),
-        distance: this.distance,
-        pitch: this.pitch,
-        yaw: this.yaw,
-    };
-    this.focusEnd = {
-        orbitTarget: target.getWorldPosition(new THREE.Vector3()),
-        distance: this.focusDistance,
-        pitch: this.pitch,
-        yaw: this.yaw,
-    };
-    this.focusDuration = Math.max(0.001, duration);
-    this.focusLerp = 0;
-
-    // Create a red sphere once (1 unit radius, small)
-    if (!this.focusDebugPoint) {
-        const geometry = new THREE.SphereGeometry(0.05, 8, 8);
-        const material = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        this.focusDebugPoint = new THREE.Mesh(geometry, material);
-        this.scene.add(this.focusDebugPoint);
-    }
-
-}
-
-
-updateFocus(deltaTime) {
-    // Smooth transition
-    if (this.focusEnd && this.focusLerp < 1) {
-        this.focusLerp += deltaTime / this.focusDuration;
-        const t = THREE.MathUtils.clamp(this.focusLerp, 0, 1);
-        const k = t * t * (3 - 2 * t);
-
-        this.orbitTarget.lerpVectors(this.focusStart.orbitTarget, this.focusEnd.orbitTarget, k);
-        this.distance = THREE.MathUtils.lerp(this.focusStart.distance, this.focusEnd.distance, k);
-        this.pitch = THREE.MathUtils.lerp(this.focusStart.pitch, this.focusEnd.pitch, k);
-        this.yaw = THREE.MathUtils.lerp(this.focusStart.yaw, this.focusEnd.yaw, k);
-
-        if (t >= 1) {
-            this.focusStart = null;
-            this.focusEnd = null;
-        }
-    }
-
-    // Planet tracking
-    if (this.focusTarget) {
-        // Get current world position of the planet
-        const planetWorldPos = this.focusTarget.getWorldPosition(new THREE.Vector3());
-
-        // Add the stored offset from mesh local center
-        const stableCenter = planetWorldPos.clone().add(this.focusLocalOffset);
-
-        // Set orbit target
-        this.orbitTarget.copy(stableCenter);
-
-        // Compute camera offset from target
-        const offset = new THREE.Vector3(
+        // --- Compute camera offset entirely relative to target ---
+        const desiredOffset = new THREE.Vector3(
             this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
             this.distance * Math.sin(this.pitch),
             this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
         );
 
-        this.camera.position.copy(this.orbitTarget).add(offset);
+        const desiredPos = new THREE.Vector3().copy(targetPos).add(desiredOffset);
 
-        // Look at planet center
-        this.camera.quaternion.setFromRotationMatrix(
-            new THREE.Matrix4().lookAt(this.camera.position, this.orbitTarget, this.camera.up)
-        );
+        // --- Directly set camera position to avoid jitter ---
+        this.camera.position.copy(desiredPos);
+        this.camera.lookAt(targetPos);
+
+        // --- Update orbitTarget ---
+        this.orbitTarget.copy(targetPos);
     }
 
-    if (this.focusDebugPoint) {
-        this.focusDebugPoint.position.copy(this.orbitTarget);
-    }
-
-}
-
-    // ======================================0
 
     /**
      * FPS mode update → WASD + free look
@@ -722,6 +569,16 @@ updateFocus(deltaTime) {
         this.camera.position.set(x, y, z);
         this.camera.lookAt(this.orbitTarget);
     }
+
+    getFirstRenderableChild(obj) {
+        if (!obj.children || obj.children.length === 0) return obj; // no children → return itself
+        for (const child of obj.children) {
+            if (child.type !== 'Group' || child.children.length === 0) return child;
+            return this.getFirstRenderableChild(child); // recurse
+        }
+        return obj;
+    }
+
 
     // --------------------------------------------------------
     // HELPERS
