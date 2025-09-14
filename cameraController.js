@@ -28,12 +28,13 @@ export class CameraController {
         // ----------------------
         // Configurable options
         // ----------------------
-        this.moveSpeed = options.moveSpeed  || 5;             // Units per second for FPS movement
-        this.lookSpeed = options.lookSpeed  || 0.002;         // Sensitivity for mouse look
+        this.moveSpeed = options.moveSpeed  || 5;               // Units per second for FPS movement
+        this.lookSpeed = options.lookSpeed  || 0.002;           // Sensitivity for mouse look
         this.panSpeed = options.panSpeed    || 0.002;           // Panning speed factor
-        this.zoomSpeed = options.zoomSpeed  || 1;             // Scroll/pinch zoom speed
-        this.enableOrbit = options.enableOrbit ?? true;      // Start in orbit mode (true) or FPS mode (false)
-        this.toggleKey = options.toggleKey  || 'Tab';         // Key to toggle between modes
+        this.keyPanSpeed = options.keyPanSpeed || 0.002;        // smaller than mouse pan
+        this.zoomSpeed = options.zoomSpeed  || 1;               // Scroll/pinch zoom speed
+        this.enableOrbit = options.enableOrbit ?? true;         // Start in orbit mode (true) or FPS mode (false)
+        this.toggleKey = options.toggleKey  || 'Tab';           // Key to toggle between modes
 
         // Orbit constraints
         this.minOrbitPitch = options.minOrbitPitch ?? -Math.PI / 2 + 0.01;  // Prevent flip
@@ -53,6 +54,10 @@ export class CameraController {
             right:      ['KeyD', 'ArrowRight'],
             up:         ['KeyQ'],
             down:       ['KeyE'],
+            panLeft:    ['KeyJ'],
+            panRight:   ['KeyL'],
+            panUp:      ['KeyI'],
+            panDown:    ['KeyK'],
         };
 
         // Target point for orbit mode (center of rotation)
@@ -87,6 +92,19 @@ export class CameraController {
         this.moveUp = false;
         this.moveDown = false;
 
+        // Pan flags with keys
+        this.panLeft = false;
+        this.panRight = false;
+        this.panUp = false;
+        this.panDown = false;
+
+        // Orbit flags with keys
+        this.orbitLeft = false;
+        this.orbitRight = false;
+        this.orbitUp = false;
+        this.orbitDown = false;
+
+
         // Focus-on-object state
         this.focusLerp = 0;
         this.focusDuration = 1.0;
@@ -105,7 +123,6 @@ export class CameraController {
             this.orbitTarget
         );
 
-
         // Save starting camera state
         this.startState = {
             position: this.camera.position.clone(),
@@ -121,6 +138,7 @@ export class CameraController {
         this._vRight = new THREE.Vector3();
         this._vUp = new THREE.Vector3();
         this._vPanOffset = new THREE.Vector3();
+        this._focusPanOffset = new THREE.Vector3();// Persistent pan offset during focus
 
         this._listeners = [];
         this.bindHandlers(); // Bind all event handlers
@@ -195,6 +213,18 @@ export class CameraController {
         if (this.keyMap.up.includes(e.code)) this.moveUp = true;
         if (this.keyMap.down.includes(e.code)) this.moveDown = true;
 
+        // pan while orbiting
+        if (this.keyMap.panLeft.includes(e.code) && this.enableOrbit) this.panLeft = true;
+        if (this.keyMap.panRight.includes(e.code) && this.enableOrbit) this.panRight = true;
+        if (this.keyMap.panUp.includes(e.code) && this.enableOrbit) this.panUp = true;
+        if (this.keyMap.panDown.includes(e.code) && this.enableOrbit) this.panDown = true;
+
+        // orbit
+        if (this.keyMap.forward.includes(e.code) && this.enableOrbit) this.orbitUp = true;
+        if (this.keyMap.backward.includes(e.code) && this.enableOrbit) this.orbitDown = true;
+        if (this.keyMap.left.includes(e.code) && this.enableOrbit) this.orbitLeft = true;
+        if (this.keyMap.right.includes(e.code) && this.enableOrbit) this.orbitRight = true;
+
         // Cycle focus between objects + res
         if (e.code === this.focusKey && this.focusObjects.length > 0) {
             e.preventDefault();
@@ -235,20 +265,24 @@ export class CameraController {
                 this.yaw = yaw;
                 this.distance = distance;
             }
+            console.log(`Switched to ${this.enableOrbit ? 'Orbit' : 'FPS'} mode`);
         }
-        console.log(`Switched to ${this.enableOrbit ? 'Orbit' : 'FPS'} mode`);
     }
 
     /**
      * Handle key release
      */
     onKeyUp(e) {
-        if (this.keyMap.forward.includes(e.code)) this.moveForward = false;
-        if (this.keyMap.backward.includes(e.code)) this.moveBackward = false;
-        if (this.keyMap.left.includes(e.code)) this.moveLeft = false;
-        if (this.keyMap.right.includes(e.code)) this.moveRight = false;
+        if (this.keyMap.forward.includes(e.code)) this.moveForward = this.orbitUp = false;
+        if (this.keyMap.backward.includes(e.code)) this.moveBackward = this.orbitDown = false;
+        if (this.keyMap.left.includes(e.code)) this.moveLeft = this.orbitLeft = false;
+        if (this.keyMap.right.includes(e.code)) this.moveRight = this.orbitRight = false;
         if (this.keyMap.up.includes(e.code)) this.moveUp = false;
         if (this.keyMap.down.includes(e.code)) this.moveDown = false;
+        if (this.keyMap.panLeft.includes(e.code)) this.panLeft = false;
+        if (this.keyMap.panRight.includes(e.code)) this.panRight = false;
+        if (this.keyMap.panUp.includes(e.code)) this.panUp = false;
+        if (this.keyMap.panDown.includes(e.code)) this.panDown = false;
     }
 
     /**
@@ -256,6 +290,7 @@ export class CameraController {
      */
     onMouseDown(e) {
         const isRightClick = e.button === 2;
+        const isLeftClick = e.button === 0 && !e.ctrlKey;
         const isCtrlLeftClick = e.button === 0 && e.ctrlKey;
         const isMiddleClick = e.button === 1;
 
@@ -279,6 +314,7 @@ export class CameraController {
     onMouseMove(e) {
         if (!this.isDragging) return;
 
+        console.log('mouse move')
         const dx = e.clientX - this.prevMouse.x;
         const dy = e.clientY - this.prevMouse.y;
         this.prevMouse.x = e.clientX;
@@ -307,6 +343,7 @@ export class CameraController {
 
     /**
      * Mouse wheel → zoom
+     * two finger in trackpad equivalent to mouse wheel
      */
     onMouseWheel(e) {
         e.preventDefault();
@@ -436,11 +473,12 @@ export class CameraController {
 
         this.focusTarget = target;
 
-        // Compute a suitable distance based on bounding sphere        
+        // Reset pan offset for new target 
+        this._focusPanOffset.set(0, 0, 0);
+
+        // Compute suitable distance based on bounding sphere
         let radius = 1;
         if (target instanceof THREE.Object3D || target instanceof THREE.Group) {
-            const firstChild = target instanceof THREE.Group ? this.getFirstRenderableChild(target) : target;
-            //const box = new THREE.Box3().setFromObject(firstChild);
             const box = new THREE.Box3().setFromObject(target);     
             const sphere = box.getBoundingSphere(new THREE.Sphere());
             radius = sphere.radius || 1;
@@ -452,27 +490,22 @@ export class CameraController {
         const distH = radius / (Math.tan(fov / 2) * aspect);
         const newDistance = Math.max(distV, distH) * distanceFactor;
 
-        // --- Reset spherical coords relative to this new target ---
+        // Reset spherical coords relative to new target
         const targetPos = new THREE.Vector3();
-        if (target instanceof THREE.Object3D) {
-            target.getWorldPosition(targetPos);
-        } else {
-            targetPos.copy(target);
-        }
+        if (target instanceof THREE.Object3D) target.getWorldPosition(targetPos);
+        else targetPos.copy(target);
 
         const offset = new THREE.Vector3().subVectors(this.camera.position, targetPos);
         this.distance = offset.length();
         this.pitch = Math.asin(offset.y / this.distance);
         this.yaw = Math.atan2(offset.x, offset.z);
 
-        // --- Interpolation (optional, smooth zoom) ---
+        // Interpolation
         this.focusStart = { distance: this.distance };
         this.focusEnd = { distance: returnToStart ? this.startState.distance : newDistance };
         this.focusDuration = duration;
         this.focusLerp = 0;
     }
-
-
 
     updateFocus(deltaTime) {
         if (!this.focusTarget) return;
@@ -497,6 +530,11 @@ export class CameraController {
             if (t >= 1) {
                 this.focusStart = null;
                 this.focusEnd = null;
+                // Reset pan offset when fully returned to start -->
+                if (this._returningToStart) {
+                    this._focusPanOffset.set(0, 0, 0);
+                    this._returningToStart = false;
+                }
             }
         }
 
@@ -507,14 +545,16 @@ export class CameraController {
             this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
         );
 
-        const desiredPos = new THREE.Vector3().copy(targetPos).add(desiredOffset);
+        const desiredPos = new THREE.Vector3().copy(targetPos)
+            .add(this._focusPanOffset)  // <-- add pan offset
+            .add(desiredOffset);
 
-        // --- Directly set camera position to avoid jitter ---
+        // Set camera position and orientation
         this.camera.position.copy(desiredPos);
-        this.camera.lookAt(targetPos);
+        this.camera.lookAt(targetPos.clone().add(this._focusPanOffset));
 
-        // --- Update orbitTarget ---
-        this.orbitTarget.copy(targetPos);
+        // Update orbitTarget so rotation respects pan
+        this.orbitTarget.copy(targetPos).add(this._focusPanOffset);
     }
 
 
@@ -549,6 +589,13 @@ export class CameraController {
      * Orbit mode update → spherical coords around target
      */
     orbitUpdate(deltaTime) {
+        // Keyboard orbit
+        const keyOrbitSpeed = 1.0 * this.lookSpeed; // tweak speed
+        if (this.orbitLeft)  this.yawVelocity   -= keyOrbitSpeed * deltaTime;
+        if (this.orbitRight) this.yawVelocity   += keyOrbitSpeed * deltaTime;
+        if (this.orbitUp)    this.pitchVelocity -= keyOrbitSpeed * deltaTime;
+        if (this.orbitDown)  this.pitchVelocity += keyOrbitSpeed * deltaTime;
+
         // Apply rotation velocities
         this.yaw += this.yawVelocity;
         this.pitch += this.pitchVelocity;
@@ -559,6 +606,12 @@ export class CameraController {
 
         // Clamp vertical rotation
         this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
+
+        // Keyboard pan (IJKL)
+        if (this.panLeft)  this.applyPan(-1, 0, this.keyPanSpeed);
+        if (this.panRight) this.applyPan(1, 0, this.keyPanSpeed);
+        if (this.panUp)    this.applyPan(0, -1, this.keyPanSpeed);
+        if (this.panDown)  this.applyPan(0, 1, this.keyPanSpeed);
 
         // Convert spherical coords to world position
         const x = this.orbitTarget.x + this.distance * Math.cos(this.pitch) * Math.sin(this.yaw);
@@ -587,9 +640,11 @@ export class CameraController {
     /**
      * Apply panning offset to orbit target
      */
-    applyPan(dx, dy) {
-        const panX = -dx * this.panSpeed * this.distance;
-        const panY = dy * this.panSpeed * this.distance;
+
+    applyPan(dx = 1, dy = 1, customSpeed = null) {
+        const speed = customSpeed !== null ? customSpeed : this.panSpeed;
+        const panX = -dx * speed * this.distance;
+        const panY =  dy * speed * this.distance;
 
         this.camera.getWorldDirection(this._vForward);
         this._vRight.crossVectors(this.camera.up, this._vForward).normalize();
@@ -599,7 +654,13 @@ export class CameraController {
             .addScaledVector(this._vRight, panX)
             .addScaledVector(this._vUp, panY);
 
-        this.orbitTarget.add(this._vPanOffset);
+        if (this.focusTarget) {
+            // Apply pan during focus (keyboard, mouse, touch)
+            this._focusPanOffset.add(this._vPanOffset);
+        } else {
+            // Normal orbit mode pan
+            this.orbitTarget.add(this._vPanOffset);
+        }
     }
 
     /**
