@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { CameraController } from './cameraController.js';
-import { Planet } from './planet.js';
+import { CameraController } from './cameraController_5.js';
+import { Planet } from './Planet_2.js';
 
 class SolarSystemApp {
 
@@ -84,7 +84,7 @@ class SolarSystemApp {
 
     constructor() {
         console.log('initialized');
-
+      
         // DOM
         this.sceneWindow = document.getElementById('scene');
 
@@ -171,8 +171,8 @@ class SolarSystemApp {
         // Collect all planets and moons
         const focusObjects = [];
         this.planets.map(p => {
-            focusObjects.push(p.group);
-            p.moons.map(m => focusObjects.push(m.group));      
+            focusObjects.push(p.planetGroup);
+            p.moons.map(m => focusObjects.push(m.planetGroup));      
         });
 
         this.controls = new CameraController(this.camera, this.renderer.domElement, {
@@ -181,10 +181,10 @@ class SolarSystemApp {
             orbitTarget: new THREE.Vector3(0, 0, 0), //look at the solar system center
             //focusObjects: this.planets.map(p => p.group), // use the actual THREE.Group from each Planet you want to cycle through
             focusObjects,
-            moveSpeed: 2, //0.2,
-            lookSpeed: 3, //0.3,
-            panSpeed: 2, //0.2,
-            zoomSpeed: 2, //0.2,
+            moveSpeed: 250, //0.2,
+            lookSpeed: 250, //0.3,
+            panSpeed: 250, //0.2,
+            zoomSpeed: 250, //0.2,
             toggleKey: 'KeyC', // press 'C' to toggle between camera orbit modes
             minOrbitPitch: THREE.MathUtils.degToRad(-45),
             maxOrbitPitch: THREE.MathUtils.degToRad(45),
@@ -236,7 +236,6 @@ class SolarSystemApp {
             }
         });
 
-        /*
         const venus = new Planet({
             name: "Venus",
             radius: 7.5,               // almost Earth-sized
@@ -257,7 +256,7 @@ class SolarSystemApp {
                 ]
             }
         });
-        
+    
         const earth = new Planet({
             name: "Earth",
             textureImg: document.getElementById("earthProjection"),
@@ -545,9 +544,7 @@ class SolarSystemApp {
             }
         });
 
-        */
-        //this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, neptune, pluto, uranus);
-        this.planets.push(sun, mercury);        
+        this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, neptune, pluto, uranus);
     }
 
     /**
@@ -563,9 +560,6 @@ class SolarSystemApp {
      * @param {number} time Timestamp from requestAnimationFrame
      */
     animate(time) {
-        // Update camera controls
-        this.controls.update();
-
         // simple circular orbits
         const dt = 0.016; // ~60fps
         this.time += dt;
@@ -579,6 +573,9 @@ class SolarSystemApp {
             p.updateOrbit();   // move in orbit
             p.updateLOD(this.camera);
         });
+
+        // Update camera controls
+        this.controls.update();
 
         // Render the scene
         this.renderer.render(this.scene, this.camera);
