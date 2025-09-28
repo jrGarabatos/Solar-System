@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CameraController } from './cameraController.js';
-import { Planet } from './Planet_2.js';
+import { Planet } from './Planet.js';
 
 class SolarSystemApp {
 
@@ -172,7 +172,7 @@ class SolarSystemApp {
         const focusObjects = [];
         this.planets.map(p => {
             focusObjects.push(p.planetGroup);
-            p.moons.map(m => focusObjects.push(m.planetGroup));      
+            //p.moons.map(m => focusObjects.push(m.planetGroup));      
         });
 
         this.controls = new CameraController(this.camera, this.renderer.domElement, {
@@ -181,10 +181,10 @@ class SolarSystemApp {
             orbitTarget: new THREE.Vector3(0, 0, 0), //look at the solar system center
             //focusObjects: this.planets.map(p => p.group), // use the actual THREE.Group from each Planet you want to cycle through
             focusObjects,
-            moveSpeed: 250, //0.2,
-            lookSpeed: 250, //0.3,
-            panSpeed: 250, //0.2,
-            zoomSpeed: 250, //0.2,
+            moveSpeed: 50, //0.2,
+            lookSpeed: 0.05, //0.3,
+            panSpeed: 50, //0.2,
+            zoomSpeed: 50, //0.2,
             toggleKey: 'KeyC', // press 'C' to toggle between camera orbit modes
             minOrbitPitch: THREE.MathUtils.degToRad(-45),
             maxOrbitPitch: THREE.MathUtils.degToRad(45),
@@ -204,8 +204,8 @@ class SolarSystemApp {
             orbitAngle: 0,
             parentPlanet: null,
             scene: this.scene,
-            detail: { low: 30, mid: 40, high: 50 },
-            lodDistances: { low: 500, mid: 300 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 7, mid: 2 },
             heightScale: 0.5,
             colorConfig: {
                 gradient: [
@@ -218,15 +218,16 @@ class SolarSystemApp {
 
         const mercury = new Planet({
             name: "Mercury",
+            textureImg: document.getElementById("mercuryProjection"),
             radius: 3,                 // very small
             orbitRadius: 40,           // closest orbit
             orbitSpeed: 0.015,         // fastest orbit
             orbitAngle: Math.PI / 8,   // just offset for variety
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 24, mid: 32, high: 40 },
-            lodDistances: { low: 200, mid: 100 },
-            heightScale: 0.4,          // crater-like bumps
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 7, mid: 1 },
+            heightScale: 0.1,          // crater-like bumps
             colorConfig: {
                 gradient: [
                 { height: -1.0, color: new THREE.Color(0x2f2f2f) }, // dark craters
@@ -238,14 +239,15 @@ class SolarSystemApp {
 
         const venus = new Planet({
             name: "Venus",
+            textureImg: document.getElementById("venusProjection"),
             radius: 7.5,               // almost Earth-sized
             orbitRadius: 70,           // between Mercury (40) and Earth (100)
             orbitSpeed: 0.012,         // slower than Mercury, faster than Earth
             orbitAngle: Math.PI / 5,   // offset for visual spread
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 30, mid: 40, high: 50 },
-            lodDistances: { low: 250, mid: 120 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 1 },
             heightScale: 0.2,          // smooth clouds, not rocky
             colorConfig: {
                 gradient: [
@@ -266,10 +268,9 @@ class SolarSystemApp {
             orbitAngle: 0,       // start at +X
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 16, mid: 36, high: 76 },
-            //lodDistances: { low: 300, mid: 150 },
-            lodDistances: { low: 5, mid: 2 },
-            heightScale: 0.1,
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 1 },
+            heightScale: 0.5,
             colorConfig: {
                 gradient: [
                     { height: -1.0, color: new THREE.Color(0x000033) }, // deep ocean
@@ -283,13 +284,14 @@ class SolarSystemApp {
         
         earth.addMoon({
             name: "Moon",
+            textureImg: document.getElementById("moonProjection"),
             radius: 0.8, 
             orbitRadius: 15,     
             orbitSpeed: 0.05,
             orbitAngle: 0,
-            detail: { low: 20, mid: 30, high: 40 },
+            detail: { low: 5, mid: 25, high: 75 },
             lodDistances: { low: 150, mid: 80 },
-            heightScale: 0.3,
+            heightScale: 0.03,
             colorConfig: {
                 gradient: [
                 { height: -1.0, color: new THREE.Color(0x2f2f2f) },
@@ -308,8 +310,8 @@ class SolarSystemApp {
             orbitAngle: Math.PI / 2,   // start at +Z (90°)
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 30, mid: 40, high: 50 },
-            lodDistances: { low: 350, mid: 200 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.5,
             colorConfig: {
                 gradient: [
@@ -323,14 +325,15 @@ class SolarSystemApp {
 
         const jupiter = new Planet({
             name: "Jupiter",
+            textureImg: document.getElementById("jupiterProjection"),
             radius: 15,
             orbitRadius: 250,
             orbitSpeed: 0.004,
             orbitAngle: Math.PI / 3,
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 40, mid: 50, high: 60 },
-            lodDistances: { low: 500, mid: 300 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 3 },
             heightScale: 0.2, // subtle "bands"
             colorConfig: {
                 gradient: [
@@ -344,14 +347,15 @@ class SolarSystemApp {
 
         const saturn = new Planet({
             name: "Saturn",
+            textureImg: document.getElementById("saturnProjection"),
             radius: 13,
             orbitRadius: 350,
             orbitSpeed: 0.003,
             orbitAngle: Math.PI / 4,
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 40, mid: 50, high: 60 },
-            lodDistances: { low: 600, mid: 400 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.2,
             colorConfig: {
                 gradient: [
@@ -371,8 +375,8 @@ class SolarSystemApp {
             orbitAngle: Math.PI / 5,
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 35, mid: 45, high: 55 },
-            lodDistances: { low: 700, mid: 500 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.1,
             colorConfig: {
                 gradient: [
@@ -390,8 +394,8 @@ class SolarSystemApp {
             orbitAngle: Math.PI / 6,
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 35, mid: 45, high: 55 },
-            lodDistances: { low: 750, mid: 550 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.1,
             colorConfig: {
                 gradient: [
@@ -409,8 +413,8 @@ class SolarSystemApp {
             orbitAngle: Math.PI / 7,
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 20, mid: 30, high: 40 },
-            lodDistances: { low: 900, mid: 650 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.2,
             colorConfig: {
                 gradient: [
@@ -420,15 +424,15 @@ class SolarSystemApp {
             }
         });
 
-                // --- Mars Moons ---
+        // --- Mars Moons ---
         mars.addMoon({
             name: "Phobos",
             radius: 0.8,
             orbitRadius: 10,
             orbitSpeed: 0.08,
             orbitAngle: 0,
-            detail: { low: 16, mid: 24, high: 32 },
-            lodDistances: { low: 100, mid: 60 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.2,
             colorConfig: {
                 gradient: [
@@ -444,8 +448,8 @@ class SolarSystemApp {
             orbitRadius: 16,
             orbitSpeed: 0.06,
             orbitAngle: Math.PI / 4,
-            detail: { low: 12, mid: 20, high: 28 },
-            lodDistances: { low: 80, mid: 50 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.15,
             colorConfig: {
                 gradient: [
@@ -462,8 +466,8 @@ class SolarSystemApp {
             orbitRadius: 20,
             orbitSpeed: 0.06,
             orbitAngle: 0,
-            detail: { low: 20, mid: 30, high: 40 },
-            lodDistances: { low: 150, mid: 100 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.3,
             colorConfig: {
                 gradient: [
@@ -479,8 +483,8 @@ class SolarSystemApp {
             orbitRadius: 25,
             orbitSpeed: 0.05,
             orbitAngle: Math.PI / 3,
-            detail: { low: 18, mid: 28, high: 36 },
-            lodDistances: { low: 140, mid: 90 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.25,
             colorConfig: {
                 gradient: [
@@ -494,11 +498,11 @@ class SolarSystemApp {
         saturn.addMoon({
             name: "Titan",
             radius: 2.5,
-            orbitRadius: 28,
+            orbitRadius: 13 * 3.5 + 2, //28,
             orbitSpeed: 0.02,
             orbitAngle: 0,
-            detail: { low: 20, mid: 30, high: 40 },
-            lodDistances: { low: 160, mid: 100 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.2,
             colorConfig: {
                 gradient: [
@@ -508,6 +512,29 @@ class SolarSystemApp {
             }
         });
 
+
+        // --- Add rings  ---
+        saturn.addRings({
+            innerRadius: 13 * 1.2,
+            outerRadius: 13 * 3.5, // This will define the ring’s outer edge
+            hexSize: 0.2,
+            gap: 0.02,
+            tilt: 26.7 * Math.PI / 180,
+            thickness: 0.01,
+            rotationSpeed: 0.0015,
+            colorBands : [
+                { name: 'inner', range: [1.0, 1.3], color: 0xffaa00, rotationSpeed: 0.002 },
+                { name: 'middle', range: [1.3, 2.0], color: 0xffffff, rotationSpeed: 0.001 },
+                { name: 'outer', range: [2.0, 3.5], color: 0xaaaaaa, rotationSpeed: 0.005 },
+            ],
+            gaps: [
+                { range: [2.0, 2.2] },   // Cassini division
+                { range: [2.25, 2.28] }, // Encke Gap
+                { range: [2.48, 2.52] }  // Keeler Gap
+            ]
+        });
+
+
         // --- Uranus Moons ---
         uranus.addMoon({
             name: "Titania",
@@ -515,8 +542,8 @@ class SolarSystemApp {
             orbitRadius: 22,
             orbitSpeed: 0.015,
             orbitAngle: 0,
-            detail: { low: 16, mid: 24, high: 32 },
-            lodDistances: { low: 120, mid: 80 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.1,
             colorConfig: {
                 gradient: [
@@ -533,8 +560,8 @@ class SolarSystemApp {
             orbitRadius: 25,
             orbitSpeed: 0.02,
             orbitAngle: 0,
-            detail: { low: 18, mid: 28, high: 36 },
-            lodDistances: { low: 130, mid: 90 },
+            detail: { low: 5, mid: 25, high: 75 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.2,
             colorConfig: {
                 gradient: [
@@ -560,27 +587,67 @@ class SolarSystemApp {
      * @param {number} time Timestamp from requestAnimationFrame
      */
     animate(time) {
-        // simple circular orbits
         const dt = 0.016; // ~60fps
         this.time += dt;
-        const ex = Math.cos(this.time * this.earthOmega) * this.earthOrbitRadius;
-        const ez = Math.sin(this.time * this.earthOmega) * this.earthOrbitRadius;
-        const mx = Math.cos(this.time * this.marsOmega) * this.marsOrbitRadius;
-        const mz = Math.sin(this.time * this.marsOmega) * this.marsOrbitRadius;
 
-        // update planet group positions and LOD (so LOD center stays correct)
+        // Update planets + moons
         this.planets.forEach(p => {
-            p.updateOrbit();   // move in orbit
+            p.updateOrbit();
             p.updateLOD(this.camera);
+            p.planetGroup.visible = true;
+            p.moons.forEach(m => m.planetGroup.visible = true);
         });
 
-        // Update camera controls
         this.controls.update();
 
-        // Render the scene
-        this.renderer.render(this.scene, this.camera);
+        // --- Camera forward ---
+        const cameraDir = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDir).normalize();
 
-        // Continue animation loop
+        let closestPlanet = null;
+        let closestDepth = Infinity;
+
+        // Cone tolerance
+        const coneAngle = THREE.MathUtils.degToRad(5);
+
+        this.planets.forEach(p => {
+            const toPlanet = new THREE.Vector3().subVectors(
+                p.planetGroup.getWorldPosition(new THREE.Vector3()),
+                this.camera.position
+            );
+
+            // Project onto camera forward → scalar depth
+            const depth = toPlanet.dot(cameraDir);
+            
+            if (depth <= 0) return; // Planet is behind the camera
+                        
+            // Angular offset from camera direction
+            const angle = cameraDir.angleTo(toPlanet.normalize());
+
+            if (angle < coneAngle && depth < closestDepth) {
+                closestDepth = depth;
+                closestPlanet = p;
+            }
+        });
+
+        // --- Focus ---
+        if (closestPlanet) {
+
+            const focusThreshold = closestPlanet.radius * 4; // tweak multiplier as needed
+            const inFocusMode = closestDepth < focusThreshold;
+
+            if (inFocusMode) {
+                this.planets.forEach(p => {
+                    if (p.name !== closestPlanet.name) {
+                        p.planetGroup.visible = false;
+                    }
+                    p.moons.forEach(m => (m.planetGroup.visible = false));
+                });
+            }
+        } 
+
+        // Render
+        this.renderer.render(this.scene, this.camera);
         requestAnimationFrame(this.animate);
     }
 
