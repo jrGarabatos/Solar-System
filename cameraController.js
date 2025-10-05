@@ -1,90 +1,82 @@
 import * as THREE from 'three';
 
-/**
- * CameraController
- * ----------------
- * Combines Orbit + FPS camera modes with smooth transitions, pan/zoom, inertia, and touch support.
- * Supports two modes:
- *   - Orbit Mode: rotate around a target point
- *   - FPS Mode: free movement using WASD + mouse look
- * Features:
- * - Frame-rate independent movement (deltaTime based)
- * - Smoothed pan scaling (clamped by distance)
- * - Pitch stabilization with easing
- * - Optional Pointer Lock API for FPS mode
- * - Bound event handlers for safe disposal
- * - Smooth focus-on-object helper
- * - Smooth inertia/damping for rotation
- * - Orbit panning, zooming, and pitch clamping
- * - Proper event cleanup (dispose)
- * - Touch gesture support (rotate, pan, pinch zoom)
- * - Mode toggle (default = Tab key)
- */
 export class CameraController {
     constructor(camera, domElement, options = {}) {
         this.camera = camera;
         this.domElement = domElement;
 
         // ----------------------
-        // Configurable options
+        // Modes
         // ----------------------
-        this.moveSpeed = options.moveSpeed  || 5;               // Units per second for FPS movement
-        this.lookSpeed = options.lookSpeed  || 0.002;           // Sensitivity for mouse look
-        this.panSpeed = options.panSpeed    || 0.002;           // Panning speed factor
-        this.keyPanSpeed = options.keyPanSpeed || 0.002;        // smaller than mouse pan
-        this.zoomSpeed = options.zoomSpeed  || 1;               // Scroll/pinch zoom speed
-        this.enableOrbit = options.enableOrbit ?? true;         // Start in orbit mode (true) or FPS mode (false)
-        this.toggleKey = options.toggleKey  || 'Tab';           // Key to toggle between modes
+        this.mode = options.mode || 'ORBIT'; // ORBIT | FPS | FLIGHT
 
-        // Orbit constraints
-        this.minOrbitPitch = options.minOrbitPitch ?? -Math.PI / 2 + 0.01;  // Prevent flip
+        // Speeds & constraints
+        this.moveSpeed = options.moveSpeed || 5;
+        this.lookSpeed = options.lookSpeed || 0.002;
+        this.panSpeed = options.panSpeed || 0.002;
+        this.keyPanSpeed = options.keyPanSpeed || 0.002;
+        this.zoomSpeed = options.zoomSpeed || 1;
+        this.enableOrbit = options.enableOrbit ?? true;
+        this.enableFlight = options.enableFlight ?? true;
+        this.toggleKey = options.toggleKey || 'Tab';
+        this.focusKey = options.focusKey || 'KeyF';
+        this.minOrbitPitch = options.minOrbitPitch ?? -Math.PI / 2 + 0.01;
         this.maxOrbitPitch = options.maxOrbitPitch ?? Math.PI / 2 - 0.01;
-        this.maxOrbitDistance = options.maxOrbitDistance ?? 200;            // Clamp zoom-out
-        this.pitchCorrectionSpeed = options.pitchCorrectionSpeed ?? 0.05;   // Auto-leveling (not always used)
+        this.maxOrbitDistance = options.maxOrbitDistance ?? 200;
+        this.dampingFactor = options.dampingFactor ?? 0.93;
+        this.inertiaEnabled = options.inertia ?? true;
 
-        // Inertia / damping
-        this.inertiaEnabled = options.inertia ?? true;       // Keep spinning after drag
-        this.dampingFactor = options.dampingFactor ?? 0.93;  // How quickly spin slows down
-
-        // Customizable key map
+        // Key map
         this.keyMap = options.keyMap || {
-            forward:    ['KeyW', 'ArrowUp'],
-            backward:   ['KeyS', 'ArrowDown'],
-            left:       ['KeyA', 'ArrowLeft'],
-            right:      ['KeyD', 'ArrowRight'],
-            up:         ['KeyQ'],
-            down:       ['KeyE'],
-            panLeft:    ['KeyJ'],
-            panRight:   ['KeyL'],
-            panUp:      ['KeyI'],
-            panDown:    ['KeyK'],
+            forward: ['KeyW', 'ArrowUp'],
+            backward: ['KeyS', 'ArrowDown'],
+            left: ['KeyA', 'ArrowLeft'],
+            right: ['KeyD', 'ArrowRight'],
+            up: ['KeyQ'],
+            down: ['KeyE'],
+            panLeft: ['KeyJ'],
+            panRight: ['KeyL'],
+            panUp: ['KeyI'],
+            panDown: ['KeyK'],
         };
 
-        // Target point for orbit mode (center of rotation)
+        // Targets
         this.orbitTarget = options.orbitTarget || new THREE.Vector3(0, 0, 0);
+        this.focusObjects = options.focusObjects || [];
+        this.focusIndex = -1;
+        this.focusTarget = null;
 
-        // ----------------------
-        // Camera orientation setup
-        // ----------------------
-        const offset = new THREE.Vector3().subVectors(this.camera.position, this.orbitTarget);
-        this.distance = offset.length();                          // Orbit distance from target
-        this.pitch = Math.asin(offset.y / this.distance);         // Vertical angle
-        this.yaw = Math.atan2(offset.x, offset.z);                // Horizontal angle
+        // Object info for flight
+        this.objectCenter = new THREE.Vector3(0, 0, 0);
+        this.objectRadius = 1;
+        this.flightHeight = options.flightHeight || 10;
 
-        // ----------------------
-        // State variables
-        // ----------------------
+        // Camera spherical coords
+        const offset = new THREE.Vector3().subVectors(camera.position, this.orbitTarget);
+        this.distance = offset.length();
+        this.pitch = Math.asin(offset.y / this.distance);
+        this.yaw = Math.atan2(offset.x, offset.z);
+
+        // Save start state for return-to-start focus
+        this.startState = {
+            position: camera.position.clone(),
+            orbitTarget: this.orbitTarget.clone(),
+            distance: this.distance,
+            pitch: this.pitch,
+            yaw: this.yaw,
+        };
+
+        // State
         this.yawVelocity = 0;
         this.pitchVelocity = 0;
-        this.isDragging = false;                                  // Mouse drag state
-        this.dragMode = null;                                     // 'rotate' | 'pan'
+        this.isDragging = false;
+        this.dragMode = null;
         this.prevMouse = { x: 0, y: 0 };
+        this.isTouching = false;
+        this.prevTouchDist = 0;
+        this.prevTouchMid = new THREE.Vector2();
 
-        this.isTouching = false;                                  // Single-touch rotate
-        this.prevTouchDist = 0;                                   // Pinch zoom distance
-        this.prevTouchMid = new THREE.Vector2();                  // Midpoint for panning
-
-        // Movement flags for FPS mode
+        // Movement flags
         this.moveForward = false;
         this.moveBackward = false;
         this.moveLeft = false;
@@ -92,62 +84,37 @@ export class CameraController {
         this.moveUp = false;
         this.moveDown = false;
 
-        // Pan flags with keys
         this.panLeft = false;
         this.panRight = false;
         this.panUp = false;
         this.panDown = false;
 
-        // Orbit flags with keys
         this.orbitLeft = false;
         this.orbitRight = false;
         this.orbitUp = false;
         this.orbitDown = false;
 
+        // Transition system
+        this.transition = null;
+        this._returningToStart = false;
 
-        // Focus-on-object state
-        this.focusLerp = 0;
-        this.focusDuration = 1.0;
-        this.focusStart = null;
-        this.focusEnd = null;
-
-        this.focusKey = options.focusKey || 'KeyF';                 // key to cycle focus
-        this.focusObjects = options.focusObjects || [];             // array of THREE.Object3D
-        this.focusIndex =  -1;                                        // current focused object index
-        this.focusDistance = this.distance;                         // target distance when focusing    
-        this.focusTarget = null;                                    // currently tracked object (if any)
-
-        // Save starting camera + orbit state
-        const { pitch, yaw, distance } = this.computePitchYawDistance(
-            this.camera.position,
-            this.orbitTarget
-        );
-
-        // Save starting camera state
-        this.startState = {
-            position: this.camera.position.clone(),
-            quaternion: this.camera.quaternion.clone(),
-            orbitTarget: this.orbitTarget.clone(),
-            distance,
-            pitch,
-            yaw
-        };
-
-        // Cached vectors for reuse (avoid garbage collection)
+        // Cached vectors
         this._vForward = new THREE.Vector3();
         this._vRight = new THREE.Vector3();
         this._vUp = new THREE.Vector3();
         this._vPanOffset = new THREE.Vector3();
-        this._focusPanOffset = new THREE.Vector3();// Persistent pan offset during focus
+        this._focusPanOffset = new THREE.Vector3();
 
+        // Event listeners
         this._listeners = [];
-        this.bindHandlers(); // Bind all event handlers
-        this.initListeners(); // Attach all input listeners
+        this.bindHandlers();
+        this.initListeners();
+        //this.returnToStart();
     }
 
-    /**
-     * Bind all event handlers to preserve references (important for disposal)
-     */
+    // ----------------------
+    // Event binding
+    // ----------------------
     bindHandlers() {
         this.onKeyDown = this.onKeyDown.bind(this);
         this.onKeyUp = this.onKeyUp.bind(this);
@@ -188,24 +155,16 @@ export class CameraController {
         add(this.domElement, 'wheel', this.onMouseWheel, { passive: false });
     }
 
-    /**
-     * Clean up listeners (call when destroying controller)
-     */
     dispose() {
-        for (const { target, type, fn } of this._listeners) {
-            target.removeEventListener(type, fn);
-        }
+        for (const { target, type, fn } of this._listeners) target.removeEventListener(type, fn);
         this._listeners = [];
     }
 
-    // --------------------------------------------------------
-    // INPUT HANDLERS
-    // --------------------------------------------------------
-
-    /**
-     * Handle key press
-     */
+    // ----------------------
+    // Key handling
+    // ----------------------
     onKeyDown(e) {
+        // --- FPS controls (move freely in space) ---
         if (this.keyMap.forward.includes(e.code)) this.moveForward = true;
         if (this.keyMap.backward.includes(e.code)) this.moveBackward = true;
         if (this.keyMap.left.includes(e.code)) this.moveLeft = true;
@@ -213,82 +172,394 @@ export class CameraController {
         if (this.keyMap.up.includes(e.code)) this.moveUp = true;
         if (this.keyMap.down.includes(e.code)) this.moveDown = true;
 
-        // pan while orbiting
-        if (this.keyMap.panLeft.includes(e.code) && this.enableOrbit) this.panLeft = true;
-        if (this.keyMap.panRight.includes(e.code) && this.enableOrbit) this.panRight = true;
-        if (this.keyMap.panUp.includes(e.code) && this.enableOrbit) this.panUp = true;
-        if (this.keyMap.panDown.includes(e.code) && this.enableOrbit) this.panDown = true;
+        // --- Orbit controls (pan and orbit) ---
+        if (this.keyMap.panLeft.includes(e.code) && (this.mode === 'ORBIT')) this.panLeft = true;
+        if (this.keyMap.panRight.includes(e.code) && (this.mode === 'ORBIT')) this.panRight = true;
+        if (this.keyMap.panUp.includes(e.code) && (this.mode === 'ORBIT')) this.panUp = true;
+        if (this.keyMap.panDown.includes(e.code) && (this.mode === 'ORBIT')) this.panDown = true;
 
-        // orbit
-        if (this.keyMap.forward.includes(e.code) && this.enableOrbit) this.orbitUp = true;
-        if (this.keyMap.backward.includes(e.code) && this.enableOrbit) this.orbitDown = true;
-        if (this.keyMap.left.includes(e.code) && this.enableOrbit) this.orbitLeft = true;
-        if (this.keyMap.right.includes(e.code) && this.enableOrbit) this.orbitRight = true;
+        if (this.keyMap.forward.includes(e.code) && (this.mode === 'ORBIT')) this.orbitUp = true;
+        if (this.keyMap.backward.includes(e.code) && (this.mode === 'ORBIT')) this.orbitDown = true;
+        if (this.keyMap.left.includes(e.code) && (this.mode === 'ORBIT')) this.orbitLeft = true;
+        if (this.keyMap.right.includes(e.code) && (this.mode === 'ORBIT')) this.orbitRight = true;
 
-        // Cycle focus between objects + res
+        // --- Flight controls (locked on north pole) ---
+        if (this.keyMap.forward.includes(e.code) && (this.mode === 'FLIGHT')) this.flightForward = true;
+        if (this.keyMap.backward.includes(e.code) && (this.mode === 'FLIGHT')) this.flightBackward = true;
+        if (this.keyMap.left.includes(e.code) && (this.mode === 'FLIGHT')) this.flightLeft = true;
+        if (this.keyMap.right.includes(e.code) && (this.mode === 'FLIGHT')) this.flightRight = true;
+        if (this.keyMap.up.includes(e.code) && (this.mode === 'FLIGHT')) this.flightUp = true;
+        if (this.keyMap.down.includes(e.code) && (this.mode === 'FLIGHT')) this.flightDown = true;
+
+        // --- Focus cycling ---
         if (e.code === this.focusKey && this.focusObjects.length > 0) {
             e.preventDefault();
 
             this.focusIndex = (this.focusIndex + 1) % (this.focusObjects.length + 1);
 
             if (this.focusIndex < this.focusObjects.length) {
-                // Focus on a specific moving object
-                const obj = this.focusObjects[this.focusIndex];
-                this.focusTarget = obj;   // track it
-                this.focusOn(obj, 1.2, 1.0); // smooth transition to start tracking
+                this.focusOn(this.focusObjects[this.focusIndex]);
             } else {
-                // Return to starting view
-                console.log("return to start view");
-                this.focusTarget = null;  // stop tracking
-                this.focusOn(this.startState.orbitTarget, 1.2, 1.0, true); // back to initial state
+                // Return to start view at the end of focus cycle
+                this._returningToStart = true;
+                this.returnToStart();
             }
         }
 
-        // Toggle orbit / FPS mode
+        // --- Strict mode toggle rules ---
         if (e.code === this.toggleKey) {
             e.preventDefault();
-            this.enableOrbit = !this.enableOrbit;
-            
-            if (!this.enableOrbit) {
-                console.log('switch to FPS');
-                // Switching to FPS mode → extract orientation from camera quaternion
-                const { pitch, yaw } = this.getPitchYawFromQuaternion(this.camera.quaternion);
-                this.pitch = pitch;
-                this.yaw = yaw;
-            } else {
-                // Switching to Orbit mode → recompute spherical coords
-                const { pitch, yaw, distance } = this.computePitchYawDistance(
-                    this.camera.position,
-                    this.orbitTarget
-                );
-                this.pitch = pitch;
-                this.yaw = yaw;
-                this.distance = distance;
-            }
-            console.log(`Switched to ${this.enableOrbit ? 'Orbit' : 'FPS'} mode`);
+            this.handleModeToggle();
         }
     }
 
-    /**
-     * Handle key release
-     */
     onKeyUp(e) {
-        if (this.keyMap.forward.includes(e.code)) this.moveForward = this.orbitUp = false;
-        if (this.keyMap.backward.includes(e.code)) this.moveBackward = this.orbitDown = false;
-        if (this.keyMap.left.includes(e.code)) this.moveLeft = this.orbitLeft = false;
-        if (this.keyMap.right.includes(e.code)) this.moveRight = this.orbitRight = false;
-        if (this.keyMap.up.includes(e.code)) this.moveUp = false;
-        if (this.keyMap.down.includes(e.code)) this.moveDown = false;
+        if (this.keyMap.forward.includes(e.code)) this.moveForward = this.orbitUp = this.flightForward = false;
+        if (this.keyMap.backward.includes(e.code)) this.moveBackward = this.orbitDown = this.flightBackward = false;
+        if (this.keyMap.left.includes(e.code)) this.moveLeft = this.orbitLeft = this.flightLeft = false;
+        if (this.keyMap.right.includes(e.code)) this.moveRight = this.orbitRight = this.flightRight = false;
+        if (this.keyMap.up.includes(e.code)) this.moveUp = this.flightUp = false;
+        if (this.keyMap.down.includes(e.code)) this.moveDown = this.flightDown =  false;
         if (this.keyMap.panLeft.includes(e.code)) this.panLeft = false;
         if (this.keyMap.panRight.includes(e.code)) this.panRight = false;
         if (this.keyMap.panUp.includes(e.code)) this.panUp = false;
         if (this.keyMap.panDown.includes(e.code)) this.panDown = false;
     }
 
+    // ----------------------
+    // Strict toggleMode logic
+    // ----------------------
+    handleModeToggle() {
+        if (this.mode === 'ORBIT') {
+            if (this.focusTarget) this.flightOn(this.focusTarget);
+            else this.mode = 'FPS';
+        } else if (this.mode === 'FLIGHT') {
+            this.mode = 'ORBIT';
+            if (this.focusTarget) this.focusOn(this.focusTarget);
+        } else if (this.mode === 'FPS') {
+            this.mode = 'ORBIT';
+            this.returnToStart();
+        }
+
+        console.log(`Switched to ${this.mode} mode`);
+    }
+
+    // ----------------------
+    // Unified transition (robust: shortest-angle + pitch safety)
+    // ----------------------
+    updateTransition(deltaTime) {
+        if (!this.transition) return;
+
+        const tObj = this.transition;
+        tObj.elapsed += deltaTime;
+        const t = THREE.MathUtils.clamp(tObj.elapsed / tObj.duration, 0, 1);
+        const k = t * t * (3 - 2 * t); // smoothstep
+
+        // --- NEW: update target live if it's moving ---
+        const liveTarget = new THREE.Vector3();
+        if (this.focusTarget instanceof THREE.Object3D) {
+            this.focusTarget.getWorldPosition(liveTarget);
+        } else {
+            liveTarget.copy(tObj.target); // fallback
+        }
+
+        // --- interpolate angles & distance ---
+        const yaw = this.lerpAngle(tObj.startYaw, tObj.endYaw, k);
+        const pitch = this.lerpAngle(tObj.startPitch, tObj.endPitch, k);
+        const clampedPitch = THREE.MathUtils.clamp(pitch, this.minOrbitPitch, this.maxOrbitPitch);
+        const distance = THREE.MathUtils.lerp(tObj.startDistance, tObj.endDistance, k);
+        this.lookAheadDistance = THREE.MathUtils.lerp(tObj.startLead, tObj.endLead, k);
+        this.lookAheadTilt = this.lerpAngle(tObj.startLookTilt, tObj.endLookTilt, k);
+
+        // write updated state
+        this.yaw = yaw;
+        this.pitch = clampedPitch;
+        this.distance = distance;
+
+        // --- compute camera position relative to the *live* target ---
+        const camOffset = new THREE.Vector3(
+            distance * Math.cos(clampedPitch) * Math.sin(yaw),
+            distance * Math.sin(clampedPitch),
+            distance * Math.cos(clampedPitch) * Math.cos(yaw)
+        );
+        this.camera.position.copy(liveTarget.clone().add(camOffset));
+
+        // --- compute dynamic look-ahead also around the live target ---
+        const lookOffset = new THREE.Vector3(
+            this.lookAheadDistance * Math.cos(clampedPitch + this.lookAheadTilt) * Math.sin(yaw),
+            this.lookAheadDistance * Math.sin(clampedPitch + this.lookAheadTilt),
+            this.lookAheadDistance * Math.cos(clampedPitch + this.lookAheadTilt) * Math.cos(yaw)
+        );
+        const lookTarget = liveTarget.clone().add(lookOffset);
+        this.camera.lookAt(lookTarget);
+
+        // --- handle end of transition ---
+        if (t >= 1) {
+            this.transition = null;
+
+            this.yaw = tObj.endYaw;
+            this.pitch = THREE.MathUtils.clamp(tObj.endPitch, this.minOrbitPitch, this.maxOrbitPitch);
+            this.distance = tObj.endDistance;
+            this.lookAheadDistance = tObj.endLead;
+            this.lookAheadTilt = tObj.endLookTilt;
+        }
+    }
+
+    // ----------------------
+    // Unified Focus/Flight on object
+    // ----------------------
+    focusOrFlightOn(
+        target,
+        {
+            mode = 'ORBIT',          // 'ORBIT' or 'FLIGHT'
+            duration = 1.0,
+            distanceFactor = 1.0,    // how far camera should be (relative to object size)
+            leadDistance = 0,        // for flight mode: distance ahead of target
+            tilt = 0,                // for flight mode: look-ahead tilt (degrees)
+            cameraTilt = 0,          // for flight mode: camera pitch offset (degrees)
+            returnToStart = false    // for focus mode: whether to return to previous distance
+        } = {}
+    ) {
+        if (!(target instanceof THREE.Object3D || target instanceof THREE.Vector3)) return;
+
+        // --- Set mode & focus target ---
+        this.mode = mode;
+        this.focusTarget = target;
+        this._returningToStart = returnToStart;
+
+        // --- Get world position of target ---
+        const targetPos = new THREE.Vector3();
+        if (target instanceof THREE.Object3D) target.getWorldPosition(targetPos);
+        else targetPos.copy(target);
+        this.orbitTarget.copy(targetPos);
+
+        // --- Compute approximate radius (for distance fitting) ---
+        let radius = 1;
+        if (target instanceof THREE.Object3D) {
+            const box = new THREE.Box3().setFromObject(target);
+            const sphere = box.getBoundingSphere(new THREE.Sphere());
+            radius = sphere.radius || 1;
+        }
+
+        // --- Compute camera distance to fit the target ---
+        const fov = THREE.MathUtils.degToRad(this.camera.fov);
+        const aspect = this.camera.aspect;
+        const distV = radius / Math.tan(fov / 2);
+        const distH = radius / (Math.tan(fov / 2) * aspect);
+        const newDistance = Math.max(distV, distH) * distanceFactor;
+
+        // --- Compute current spherical coordinates (relative to target) ---
+        const offset = new THREE.Vector3().subVectors(this.camera.position, targetPos);
+        const startDistance = offset.length();
+        const startYaw = Math.atan2(offset.x, offset.z);
+        const startPitch = this._getPitchFromOffset(offset);
+
+        // --- Define end spherical coordinates ---
+        let endYaw = startYaw;
+        let endPitch = startPitch;
+        let endDistance = newDistance;
+        let endLead = 0;
+        let endLookTilt = 0;
+
+        if (mode === 'FLIGHT') {
+            endPitch = startPitch + THREE.MathUtils.degToRad(cameraTilt);
+            
+            // --- Dramatic scaling for lead distance based on object size ---
+            // Keeps smaller bodies reasonable but expands heavily for giants             
+            const logR = Math.log10(radius + 10);
+            const radiusFactor = Math.pow(10, (logR - 2.0) * 1.8);
+    
+            endLead = radiusFactor * leadDistance;                   
+            endLookTilt = THREE.MathUtils.degToRad(tilt);
+        } else if (mode === 'ORBIT' && returnToStart) {
+            endDistance = this.startState?.distance ?? newDistance;
+        }
+
+        // --- Capture look-ahead start values ---
+        const startLead = this.lookAheadDistance ?? 0;
+        const startLookTilt = this.lookAheadTilt ?? 0;
+
+        // --- Prepare transition object ---
+        this.transition = {
+            type: mode === 'FLIGHT' ? 'flight' : 'focus',
+            target: targetPos.clone(),
+            startYaw, startPitch, startDistance,
+            endYaw, endPitch, endDistance,
+            startLead, endLead,
+            startLookTilt, endLookTilt,
+            duration, elapsed: 0
+        };
+    }
+
+    // ----------------------
+    // Focus on object (start a transition into ORBIT/focus)
+    // ----------------------
+    focusOn(target, returnToStart) {
+        // Focus on a planet (orbit mode)
+        this.focusOrFlightOn(target, {
+            mode: 'ORBIT',
+            duration: 1.2,
+            distanceFactor: 1.2,
+            returnToStart: returnToStart
+        });
+    }
+
+    // ----------------------
+    // Flight over object (start a transition into FLIGHT)
+    // ----------------------
+    flightOn(target) {
+        // Switch to flight mode around a planet
+        this.focusOrFlightOn(target, {
+            mode: 'FLIGHT',
+            duration: 1.0,
+            distanceFactor: 0.5,
+            leadDistance: 75.0,
+            tilt: 45,
+            cameraTilt: 0
+        });
+    }
+
+    /**
+     * Returns the camera to the starting position using same logic as focusOn.
+     */
+    returnToStart() {
+        this.focusOn(this.startState.orbitTarget, true);
+    }
+
+    // ----------------------
+    // Update per frame
+    // ----------------------
+    update(deltaTime = 1 / 60) {
+        if (this.transition) {
+            this.updateTransition(deltaTime);
+            if (this.transition) return;
+        }
+
+        switch (this.mode) {
+            case 'ORBIT': this.updateOrbit(deltaTime); break;
+            case 'FPS': this.updateFPS(deltaTime); break;
+            case 'FLIGHT': this.updateFlight(deltaTime); break;
+        }
+    }
+
+    // ----------------------
+    // Orbit, FPS, Flight updates
+    // ----------------------
+    updateOrbit(deltaTime) {
+        const keyOrbitSpeed = 1.0 * this.lookSpeed;
+
+        // --- Update velocities from key input ---
+        if (this.orbitLeft) this.yawVelocity -= keyOrbitSpeed * deltaTime;
+        if (this.orbitRight) this.yawVelocity += keyOrbitSpeed * deltaTime;
+        if (this.orbitUp) this.pitchVelocity -= keyOrbitSpeed * deltaTime;
+        if (this.orbitDown) this.pitchVelocity += keyOrbitSpeed * deltaTime;
+
+        this.yaw += this.yawVelocity;
+        this.pitch += this.pitchVelocity;
+        this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
+
+        this.yawVelocity *= this.dampingFactor;
+        this.pitchVelocity *= this.dampingFactor;
+
+        // --- Handle panning ---
+        if (this.panLeft) this.applyPan(-1, 0, this.keyPanSpeed);
+        if (this.panRight) this.applyPan(1, 0, this.keyPanSpeed);
+        if (this.panUp) this.applyPan(0, -1, this.keyPanSpeed);
+        if (this.panDown) this.applyPan(0, 1, this.keyPanSpeed);
+
+        // --- Compute dynamic orbit center ---
+        const center = new THREE.Vector3();
+        if (this.focusTarget instanceof THREE.Object3D) {
+            this.focusTarget.getWorldPosition(center);
+        } else {
+            center.copy(this.orbitTarget);
+        }
+        center.add(this._focusPanOffset);
+
+        // --- Camera position in spherical coordinates ---
+        const offset = new THREE.Vector3(
+            this.distance * Math.sin(this.yaw) * Math.cos(this.pitch),
+            this.distance * Math.sin(this.pitch),
+            this.distance * Math.cos(this.yaw) * Math.cos(this.pitch)
+        );
+        this.camera.position.copy(center.clone().add(offset));
+
+        this.camera.lookAt(center);
+    }
+
+
+    updateFPS(deltaTime) {        
+        // Forward/right movement vectors
+        this.camera.getWorldDirection(this._vForward);
+        this._vForward.y = 0;
+        this._vForward.normalize();
+        
+        this._vRight.crossVectors(this._vForward, this.camera.up).normalize();
+
+        const move = new THREE.Vector3();
+        if (this.moveForward) move.add(this._vForward);
+        if (this.moveBackward) move.sub(this._vForward);
+        if (this.moveLeft) move.sub(this._vRight);
+        if (this.moveRight) move.add(this._vRight);
+        if (this.moveUp) move.y += 1;
+        if (this.moveDown) move.y -= 1;
+
+        // Step size based on frame time
+        move.multiplyScalar(this.moveSpeed * deltaTime);
+        this.camera.position.add(move);
+    }
+
+    updateFlight(deltaTime) {
+        const keyOrbitSpeed = 1.0 * this.lookSpeed;
+
+        // --- Update velocities from key input ---
+        if (this.flightLeft) this.yawVelocity -= keyOrbitSpeed * deltaTime;
+        if (this.flightRight) this.yawVelocity += keyOrbitSpeed * deltaTime;
+        if (this.flightForward) this.pitchVelocity -= keyOrbitSpeed * deltaTime;
+        if (this.flightBackward) this.pitchVelocity += keyOrbitSpeed * deltaTime;
+
+        this.yaw += this.yawVelocity;
+        this.pitch += this.pitchVelocity;
+        this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
+
+        this.yawVelocity *= this.dampingFactor;
+        this.pitchVelocity *= this.dampingFactor;
+
+        // --- Compute dynamic orbit center ---
+        const center = new THREE.Vector3();
+        if (this.focusTarget instanceof THREE.Object3D) {
+            this.focusTarget.getWorldPosition(center);
+        } else {
+            center.copy(this.orbitTarget);
+        }
+        center.add(this._focusPanOffset);
+
+        // --- Camera position in spherical coordinates ---
+        const offset = new THREE.Vector3(
+            this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
+            this.distance * Math.sin(this.pitch),
+            this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
+        );
+        this.camera.position.copy(center.clone().add(offset));
+
+        // --- Look-ahead point moves with orbit center ---
+        const lookOffset = new THREE.Vector3(
+            this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.sin(this.yaw),
+            this.lookAheadDistance * Math.sin(this.pitch + this.lookAheadTilt),
+            this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.cos(this.yaw)
+        );
+        const lookTarget = center.clone().add(lookOffset);
+        this.camera.lookAt(lookTarget);
+    }
+
+    // ----------------------
+    // Mouse events
+    // ----------------------
     /**
      * Mouse down → start dragging (rotate or pan)
      */
     onMouseDown(e) {
+        console.log('mouse');
         const isRightClick = e.button === 2;
         const isLeftClick = e.button === 0 && !e.ctrlKey;
         const isCtrlLeftClick = e.button === 0 && e.ctrlKey;
@@ -314,7 +585,6 @@ export class CameraController {
     onMouseMove(e) {
         if (!this.isDragging) return;
 
-        console.log('mouse move')
         const dx = e.clientX - this.prevMouse.x;
         const dy = e.clientY - this.prevMouse.y;
         this.prevMouse.x = e.clientX;
@@ -323,7 +593,7 @@ export class CameraController {
         if (this.dragMode === 'rotate') {
             this.yawVelocity = -dx * this.lookSpeed;
             this.pitchVelocity = -dy * this.lookSpeed;
-        } else if (this.dragMode === 'pan' && this.enableOrbit) {
+        } else if (this.dragMode === 'pan' && (this.mode === 'ORBIT')) {
             this.applyPan(dx, dy);
         }
     }
@@ -348,16 +618,24 @@ export class CameraController {
     onMouseWheel(e) {
         e.preventDefault();
         const delta = e.deltaY;
-
-        if (this.enableOrbit) {
+    
+        if (this.mode === 'ORBIT') {
             this.distance += delta * this.zoomSpeed * 0.01;
             this.distance = Math.min(Math.max(0.5, this.distance), this.maxOrbitDistance);
-        } else {
+        } else if (this.mode === 'FLIGHT') {
+            console.log('zoom');
+            this.distance += delta * this.zoomSpeed * 0.01;
+            this.distance = Math.max(0.5, this.distance);
+        }
+        else {
             this.camera.getWorldDirection(this._vForward);
             this.camera.position.addScaledVector(this._vForward, delta * this.zoomSpeed * 0.01);
         }
     }
 
+    // ----------------------
+    // Touch events placeholders
+    // ----------------------
     /**
      * Touch start → distinguish between rotate (1 finger) or zoom/pan (2 fingers)
      */
@@ -402,10 +680,11 @@ export class CameraController {
             const zoomDelta = this.prevTouchDist - dist;
             this.prevTouchDist = dist;
 
-            if (this.enableOrbit) {
+            if (this.mode === 'ORBIT' || this.mode === 'FLIGHT') {
                 this.distance += zoomDelta * this.zoomSpeed * 0.01;
                 this.distance = Math.min(Math.max(0.5, this.distance), this.maxOrbitDistance);
             } else {
+                console.log('zoom');
                 this.camera.translateZ(zoomDelta * this.zoomSpeed * 0.01);
             }
 
@@ -416,7 +695,7 @@ export class CameraController {
             const panDY = midY - this.prevTouchMid.y;
             this.prevTouchMid.set(midX, midY);
 
-            if (this.enableOrbit) {
+            if (this.mode === 'ORBIT') {
                 this.applyPan(panDX, panDY);
             }
         }
@@ -433,218 +712,15 @@ export class CameraController {
         }
     }
 
-    // --------------------------------------------------------
-    // CORE UPDATE LOOP
-    // --------------------------------------------------------
-
-    /**
-     * Update per frame
-     */
-    update(deltaTime = 1 / 60) {
-        if (this.enableOrbit) {
-            this.orbitUpdate(deltaTime);
-        } else {
-            this.fpsUpdate(deltaTime);
-        }
-
-        this.updateFocus(deltaTime);
-    }
 
     // ----------------------
-    // Focus-on-object logic
+    // Helper Functions
     // ----------------------
     
-    /**
-     * Smoothly move orbit target and distance to focus on an object or point.
-     * Works with any Object3D (Group, Mesh, etc.) or Vector3.
-     * If target is a Group, only the first child is considered.
-     * @param {THREE.Object3D|THREE.Vector3} target - Object or position to focus on
-     * @param {number} duration - Transition duration in seconds
-     * @param {number} distanceFactor - Padding multiplier for object size
-     * @param {boolean} returnToStart - If true, interpolate back to starting view
-     */
-    focusOn(target, duration = 1.0, distanceFactor = 1.2, returnToStart = false) {
-        this._returningToStart = returnToStart;
-
-        if (!(target instanceof THREE.Object3D || target instanceof THREE.Vector3)) {
-            console.warn('focusOn: target must be Object3D or Vector3');
-            return;
-        }
-
-        this.focusTarget = target;
-
-        // Reset pan offset for new target 
-        this._focusPanOffset.set(0, 0, 0);
-
-        // Compute suitable distance based on bounding sphere
-        let radius = 1;
-        if (target instanceof THREE.Object3D || target instanceof THREE.Group) {
-            const box = new THREE.Box3().setFromObject(target);     
-            const sphere = box.getBoundingSphere(new THREE.Sphere());
-            radius = sphere.radius || 1;
-        }
-
-        const fov = THREE.MathUtils.degToRad(this.camera.fov);
-        const aspect = this.camera.aspect;
-        const distV = radius / Math.tan(fov / 2);
-        const distH = radius / (Math.tan(fov / 2) * aspect);
-        const newDistance = Math.max(distV, distH) * distanceFactor;
-
-        // Reset spherical coords relative to new target
-        const targetPos = new THREE.Vector3();
-        if (target instanceof THREE.Object3D) target.getWorldPosition(targetPos);
-        else targetPos.copy(target);
-
-        const offset = new THREE.Vector3().subVectors(this.camera.position, targetPos);
-        this.distance = offset.length();
-        this.pitch = Math.asin(offset.y / this.distance);
-        this.yaw = Math.atan2(offset.x, offset.z);
-
-        // Interpolation
-        this.focusStart = { distance: this.distance };
-        this.focusEnd = { distance: returnToStart ? this.startState.distance : newDistance };
-        this.focusDuration = duration;
-        this.focusLerp = 0;
-    }
-
-    updateFocus(deltaTime) {
-        if (!this.focusTarget) return;
-
-        // --- Get target world position ---
-        let dynamicTarget = this.focusTarget;
-        if (dynamicTarget instanceof THREE.Group && dynamicTarget.children.length > 0) {
-            dynamicTarget = this.getFirstRenderableChild(dynamicTarget);
-        }
-
-        const targetPos = new THREE.Vector3();
-        if (dynamicTarget instanceof THREE.Object3D) dynamicTarget.getWorldPosition(targetPos);
-        else targetPos.copy(dynamicTarget);
-
-        // --- Smoothly interpolate distance ---
-        if (this.focusEnd && this.focusLerp < 1) {
-            this.focusLerp += deltaTime / this.focusDuration;
-            const t = THREE.MathUtils.clamp(this.focusLerp, 0, 1);
-            const k = t * t * (3 - 2 * t); // smoothstep
-            this.distance = THREE.MathUtils.lerp(this.focusStart.distance, this.focusEnd.distance, k);
-
-            if (t >= 1) {
-                this.focusStart = null;
-                this.focusEnd = null;
-                // Reset pan offset when fully returned to start -->
-                if (this._returningToStart) {
-                    this._focusPanOffset.set(0, 0, 0);
-                    this._returningToStart = false;
-                }
-            }
-        }
-
-        // --- Compute camera offset entirely relative to target ---
-        const desiredOffset = new THREE.Vector3(
-            this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
-            this.distance * Math.sin(this.pitch),
-            this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
-        );
-
-        const desiredPos = new THREE.Vector3().copy(targetPos)
-            .add(this._focusPanOffset)  // <-- add pan offset
-            .add(desiredOffset);
-
-        // Set camera position and orientation
-        this.camera.position.copy(desiredPos);
-        this.camera.lookAt(targetPos.clone().add(this._focusPanOffset));
-
-        // Update orbitTarget so rotation respects pan
-        this.orbitTarget.copy(targetPos).add(this._focusPanOffset);
-    }
-
-
-    /**
-     * FPS mode update → WASD + free look
-     */
-    fpsUpdate(deltaTime) {
-        // Apply yaw & pitch to camera quaternion
-        const quat = new THREE.Quaternion().setFromEuler(
-            new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ')
-        );
-        this.camera.quaternion.copy(quat);
-
-        // Forward/right movement vectors
-        this.camera.getWorldDirection(this._vForward);
-        this._vForward.y = 0;
-        this._vForward.normalize();
-        this._vRight.crossVectors(this._vForward, this.camera.up).normalize();
-
-        // Step size based on frame time
-        const moveStep = this.moveSpeed * deltaTime;
-
-        if (this.moveForward) this.camera.position.addScaledVector(this._vForward, moveStep);
-        if (this.moveBackward) this.camera.position.addScaledVector(this._vForward, -moveStep);
-        if (this.moveLeft) this.camera.position.addScaledVector(this._vRight, -moveStep);
-        if (this.moveRight) this.camera.position.addScaledVector(this._vRight, moveStep);
-        if (this.moveUp) this.camera.position.y += moveStep;
-        if (this.moveDown) this.camera.position.y -= moveStep;
-    }
-
-    /**
-     * Orbit mode update → spherical coords around target
-     */
-    orbitUpdate(deltaTime) {
-        // Keyboard orbit
-        const keyOrbitSpeed = 1.0 * this.lookSpeed; // tweak speed
-        if (this.orbitLeft)  this.yawVelocity   -= keyOrbitSpeed * deltaTime;
-        if (this.orbitRight) this.yawVelocity   += keyOrbitSpeed * deltaTime;
-        if (this.orbitUp)    this.pitchVelocity -= keyOrbitSpeed * deltaTime;
-        if (this.orbitDown)  this.pitchVelocity += keyOrbitSpeed * deltaTime;
-
-        // Apply rotation velocities
-        this.yaw += this.yawVelocity;
-        this.pitch += this.pitchVelocity;
-
-        // Apply damping (inertia)
-        this.yawVelocity *= this.dampingFactor;
-        this.pitchVelocity *= this.dampingFactor;
-
-        // Clamp vertical rotation
-        this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
-
-        // Keyboard pan (IJKL)
-        if (this.panLeft)  this.applyPan(-1, 0, this.keyPanSpeed);
-        if (this.panRight) this.applyPan(1, 0, this.keyPanSpeed);
-        if (this.panUp)    this.applyPan(0, -1, this.keyPanSpeed);
-        if (this.panDown)  this.applyPan(0, 1, this.keyPanSpeed);
-
-        // Convert spherical coords to world position
-        const x = this.orbitTarget.x + this.distance * Math.cos(this.pitch) * Math.sin(this.yaw);
-        const y = this.orbitTarget.y + this.distance * Math.sin(this.pitch);
-        const z = this.orbitTarget.z + this.distance * Math.cos(this.pitch) * Math.cos(this.yaw);
-
-        // Apply camera position and orientation
-        this.camera.position.set(x, y, z);
-        this.camera.lookAt(this.orbitTarget);
-    }
-
-    getFirstRenderableChild(obj) {
-        if (!obj.children || obj.children.length === 0) return obj; // no children → return itself
-        for (const child of obj.children) {
-            if (child.type !== 'Group' || child.children.length === 0) return child;
-            return this.getFirstRenderableChild(child); // recurse
-        }
-        return obj;
-    }
-
-
-    // --------------------------------------------------------
-    // HELPERS
-    // --------------------------------------------------------
-
-    /**
-     * Apply panning offset to orbit target
-     */
-
-    applyPan(dx = 1, dy = 1, customSpeed = null) {
-        const speed = customSpeed !== null ? customSpeed : this.panSpeed;
+    // Helper: pan offset
+    applyPan(dx = 1, dy = 1, speed = this.panSpeed) {
         const panX = -dx * speed * this.distance;
-        const panY =  dy * speed * this.distance;
+        const panY = dy * speed * this.distance;
 
         this.camera.getWorldDirection(this._vForward);
         this._vRight.crossVectors(this.camera.up, this._vForward).normalize();
@@ -654,44 +730,30 @@ export class CameraController {
             .addScaledVector(this._vRight, panX)
             .addScaledVector(this._vUp, panY);
 
-        if (this.focusTarget) {
-            // Apply pan during focus (keyboard, mouse, touch)
-            this._focusPanOffset.add(this._vPanOffset);
-        } else {
-            // Normal orbit mode pan
-            this.orbitTarget.add(this._vPanOffset);
-        }
+        if (this.focusTarget) this._focusPanOffset.add(this._vPanOffset);
+        else this.orbitTarget.add(this._vPanOffset);
     }
 
-    /**
-     * Compute pitch/yaw from camera forward vector
-     */
-    computePitchYaw(camera) {
-        const dir = new THREE.Vector3();
-        camera.getWorldDirection(dir);
-        dir.normalize();
-        const pitch = Math.asin(dir.y);
-        const yaw = Math.atan2(dir.x, dir.z);
-        return { pitch, yaw };
+    // Helper: shortest-path angle interpolation
+    lerpAngle(a, b, t) {
+        let diff = b - a;
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+        return a + diff * t;
     }
 
-    /**
-     * Compute pitch/yaw/distance from position & target
-     */
-    computePitchYawDistance(cameraPos, targetPos) {
-        const offset = new THREE.Vector3().subVectors(cameraPos, targetPos);
-        const distance = offset.length();
-        const dir = offset.clone().normalize();
-        const pitch = Math.asin(dir.y);
-        const yaw = Math.atan2(dir.x, dir.z);
-        return { pitch, yaw, distance };
+    // Helper: stable pitch from offset (avoid asin pitfalls)
+    _getPitchFromOffset(offset) {
+        // pitch = atan2(y, horizontalRadius)
+        const horiz = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
+        return Math.atan2(offset.y, horiz); // range (-PI/2, PI/2)
     }
 
-    /**
-     * Extract pitch/yaw from quaternion
-     */
-    getPitchYawFromQuaternion(quaternion) {
-        const euler = new THREE.Euler().setFromQuaternion(quaternion, 'YXZ');
-        return { pitch: euler.x, yaw: euler.y };
-    }
 }
+
+
+
+
+
+
+
