@@ -186,8 +186,8 @@ class SolarSystemApp {
             panSpeed: 50, //0.2,
             zoomSpeed: 50, //0.2,
             toggleKey: 'KeyC', // press 'C' to toggle between camera orbit modes
-            minOrbitPitch: THREE.MathUtils.degToRad(-45),
-            maxOrbitPitch: THREE.MathUtils.degToRad(45),
+            minOrbitPitch: THREE.MathUtils.degToRad(-55),
+            maxOrbitPitch: THREE.MathUtils.degToRad(75),
             maxOrbitDistance: 5000,
         });
 
@@ -268,8 +268,8 @@ class SolarSystemApp {
             orbitAngle: 0,       // start at +X
             parentPlanet: sun,
             scene: this.scene,
-            detail: { low: 5, mid: 25, high: 75 },
-            lodDistances: { low: 5, mid: 1 },
+            detail: { low: 5, mid: 25, high: 50 },
+            lodDistances: { low: 5, mid: 2 },
             heightScale: 0.5,
             colorConfig: {
                 gradient: [
@@ -571,7 +571,7 @@ class SolarSystemApp {
             }
         });
 
-        this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, neptune, pluto, uranus);
+        this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, neptune, pluto, uranus);     
     }
 
     /**
@@ -596,34 +596,29 @@ class SolarSystemApp {
             p.updateLOD(this.camera);
             p.planetGroup.visible = true;
             p.moons.forEach(m => m.planetGroup.visible = true);
+            p.rings.forEach(r => r.group.visible = true);
         });
 
         this.controls.update();
-
-        // --- Camera forward ---
-        const cameraDir = new THREE.Vector3();
-        this.camera.getWorldDirection(cameraDir).normalize();
 
         let closestPlanet = null;
         let closestDepth = Infinity;
 
         // Cone tolerance
-        const coneAngle = THREE.MathUtils.degToRad(5);
+        const coneAngle = THREE.MathUtils.degToRad(45); // increase a bit if needed
+
+        // Ensure cameraDir is normalized
+        const cameraDir = new THREE.Vector3();
+        this.camera.getWorldDirection(cameraDir).normalize();
 
         this.planets.forEach(p => {
-            const toPlanet = new THREE.Vector3().subVectors(
-                p.planetGroup.getWorldPosition(new THREE.Vector3()),
-                this.camera.position
-            );
+            const planetPos = p.planetGroup.getWorldPosition(new THREE.Vector3());
+            const toPlanet = new THREE.Vector3().subVectors(planetPos, this.camera.position);
 
-            // Project onto camera forward → scalar depth
             const depth = toPlanet.dot(cameraDir);
-            
-            if (depth <= 0) return; // Planet is behind the camera
-                        
-            // Angular offset from camera direction
-            const angle = cameraDir.angleTo(toPlanet.normalize());
+            if (depth <= 0) return; // behind camera
 
+            const angle = cameraDir.angleTo(toPlanet.clone().normalize());
             if (angle < coneAngle && depth < closestDepth) {
                 closestDepth = depth;
                 closestPlanet = p;
@@ -633,7 +628,7 @@ class SolarSystemApp {
         // --- Focus ---
         if (closestPlanet) {
 
-            const focusThreshold = closestPlanet.radius * 4; // tweak multiplier as needed
+            const focusThreshold = closestPlanet.radius * 2; // tweak multiplier as needed
             const inFocusMode = closestDepth < focusThreshold;
 
             if (inFocusMode) {
@@ -641,7 +636,8 @@ class SolarSystemApp {
                     if (p.name !== closestPlanet.name) {
                         p.planetGroup.visible = false;
                     }
-                    p.moons.forEach(m => (m.planetGroup.visible = false));
+                    p.moons.forEach(m => m.planetGroup.visible = false);
+                    p.rings.forEach(r => r.group.visible = false);
                 });
             }
         } 
