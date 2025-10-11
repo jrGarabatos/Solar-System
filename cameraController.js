@@ -109,7 +109,7 @@ export class CameraController {
         this._listeners = [];
         this.bindHandlers();
         this.initListeners();
-        //this.returnToStart();
+        this.returnToStart();
     }
 
     // ----------------------
@@ -247,6 +247,10 @@ export class CameraController {
     // ----------------------
     // Unified transition (robust: shortest-angle + pitch safety)
     // ----------------------
+
+    // ----------------------
+    // Update Transition (Quaternion-based)
+    // ----------------------
     updateTransition(deltaTime) {
         if (!this.transition) return;
 
@@ -255,48 +259,62 @@ export class CameraController {
         const t = THREE.MathUtils.clamp(tObj.elapsed / tObj.duration, 0, 1);
         const k = t * t * (3 - 2 * t); // smoothstep
 
-        // --- NEW: update target live if it's moving ---
+        // --- Live target position ---
         const liveTarget = new THREE.Vector3();
         if (this.focusTarget instanceof THREE.Object3D) {
             this.focusTarget.getWorldPosition(liveTarget);
         } else {
-            liveTarget.copy(tObj.target); // fallback
+            liveTarget.copy(tObj.target);
         }
 
-        // --- interpolate angles & distance ---
+        // --- Interpolate yaw, pitch, distance, lookAhead ---
         const yaw = this.lerpAngle(tObj.startYaw, tObj.endYaw, k);
         const pitch = this.lerpAngle(tObj.startPitch, tObj.endPitch, k);
         const clampedPitch = THREE.MathUtils.clamp(pitch, this.minOrbitPitch, this.maxOrbitPitch);
         const distance = THREE.MathUtils.lerp(tObj.startDistance, tObj.endDistance, k);
-        this.lookAheadDistance = THREE.MathUtils.lerp(tObj.startLead, tObj.endLead, k);
-        this.lookAheadTilt = this.lerpAngle(tObj.startLookTilt, tObj.endLookTilt, k);
+        const lookAheadDistance = THREE.MathUtils.lerp(tObj.startLead, tObj.endLead, k);
+        const lookAheadTilt = this.lerpAngle(tObj.startLookTilt, tObj.endLookTilt, k);
 
-        // write updated state
         this.yaw = yaw;
         this.pitch = clampedPitch;
         this.distance = distance;
+        this.lookAheadDistance = lookAheadDistance;
+        this.lookAheadTilt = lookAheadTilt;
 
-        // --- compute camera position relative to the *live* target ---
-        const camOffset = new THREE.Vector3(
+        // --- Camera position (spherical coordinates) ---
+        const offset = new THREE.Vector3(
             distance * Math.cos(clampedPitch) * Math.sin(yaw),
             distance * Math.sin(clampedPitch),
             distance * Math.cos(clampedPitch) * Math.cos(yaw)
         );
-        this.camera.position.copy(liveTarget.clone().add(camOffset));
+        this.camera.position.copy(liveTarget.clone().add(offset));
 
-        // --- compute dynamic look-ahead also around the live target ---
+        // --- Look-ahead point ---
         const lookOffset = new THREE.Vector3(
-            this.lookAheadDistance * Math.cos(clampedPitch + this.lookAheadTilt) * Math.sin(yaw),
-            this.lookAheadDistance * Math.sin(clampedPitch + this.lookAheadTilt),
-            this.lookAheadDistance * Math.cos(clampedPitch + this.lookAheadTilt) * Math.cos(yaw)
+            lookAheadDistance * Math.cos(clampedPitch + lookAheadTilt) * Math.sin(yaw),
+            lookAheadDistance * Math.sin(clampedPitch + lookAheadTilt),
+            lookAheadDistance * Math.cos(clampedPitch + lookAheadTilt) * Math.cos(yaw)
         );
         const lookTarget = liveTarget.clone().add(lookOffset);
+
+        // --- Robust up vector to avoid flipping at poles ---
+        const forward = new THREE.Vector3().subVectors(lookTarget, this.camera.position).normalize();
+
+        // Use previous up vector as reference if near poles
+        let referenceUp = this.camera.up.clone();
+        if (Math.abs(forward.dot(referenceUp)) > 0.99) {
+            referenceUp.set(1, 0, 0); // fallback if forward is almost parallel to up
+        }
+
+        const right = new THREE.Vector3().crossVectors(forward, referenceUp).normalize();
+        const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+        this.camera.up.copy(up);
         this.camera.lookAt(lookTarget);
 
-        // --- handle end of transition ---
+        // --- End of transition ---
         if (t >= 1) {
             this.transition = null;
-
             this.yaw = tObj.endYaw;
             this.pitch = THREE.MathUtils.clamp(tObj.endPitch, this.minOrbitPitch, this.maxOrbitPitch);
             this.distance = tObj.endDistance;
@@ -305,19 +323,20 @@ export class CameraController {
         }
     }
 
+
     // ----------------------
     // Unified Focus/Flight on object
-    // ----------------------
+    // ----------------------    
     focusOrFlightOn(
         target,
         {
-            mode = 'ORBIT',          // 'ORBIT' or 'FLIGHT'
+            mode = 'ORBIT',
             duration = 1.0,
-            distanceFactor = 1.0,    // how far camera should be (relative to object size)
-            leadDistance = 0,        // for flight mode: distance ahead of target
-            tilt = 0,                // for flight mode: look-ahead tilt (degrees)
-            cameraTilt = 0,          // for flight mode: camera pitch offset (degrees)
-            returnToStart = false    // for focus mode: whether to return to previous distance
+            distanceFactor = 1.0,
+            leadDistance = 0,
+            tilt = 0,
+            cameraTilt = 0,
+            returnToStart = false
         } = {}
     ) {
         if (!(target instanceof THREE.Object3D || target instanceof THREE.Vector3)) return;
@@ -332,6 +351,9 @@ export class CameraController {
         if (target instanceof THREE.Object3D) target.getWorldPosition(targetPos);
         else targetPos.copy(target);
         this.orbitTarget.copy(targetPos);
+
+        // --- Initialize lastCameraUp to current camera up ---
+        this.lastCameraUp = this.camera.up.clone();
 
         // --- Compute approximate radius (for distance fitting) ---
         let radius = 1;
@@ -363,13 +385,11 @@ export class CameraController {
 
         if (mode === 'FLIGHT') {
             endPitch = startPitch + THREE.MathUtils.degToRad(cameraTilt);
-            
-            // --- Dramatic scaling for lead distance based on object size ---
-            // Keeps smaller bodies reasonable but expands heavily for giants             
+
             const logR = Math.log10(radius + 10);
             const radiusFactor = Math.pow(10, (logR - 2.0) * 1.8);
-    
-            endLead = radiusFactor * leadDistance;                   
+
+            endLead = radiusFactor * leadDistance;
             endLookTilt = THREE.MathUtils.degToRad(tilt);
         } else if (mode === 'ORBIT' && returnToStart) {
             endDistance = this.startState?.distance ?? newDistance;
@@ -445,10 +465,14 @@ export class CameraController {
     // ----------------------
     // Orbit, FPS, Flight updates
     // ----------------------
+
+    // ----------------------
+    // Update Orbit (Quaternion-based)
+    // ----------------------
     updateOrbit(deltaTime) {
         const keyOrbitSpeed = 1.0 * this.lookSpeed;
 
-        // --- Update velocities from key input ---
+        // --- Update yaw/pitch velocities from key input ---
         if (this.orbitLeft) this.yawVelocity -= keyOrbitSpeed * deltaTime;
         if (this.orbitRight) this.yawVelocity += keyOrbitSpeed * deltaTime;
         if (this.orbitUp) this.pitchVelocity -= keyOrbitSpeed * deltaTime;
@@ -456,18 +480,15 @@ export class CameraController {
 
         this.yaw += this.yawVelocity;
         this.pitch += this.pitchVelocity;
+
+        // Clamp pitch to avoid flipping
         this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
 
+        // Apply damping
         this.yawVelocity *= this.dampingFactor;
         this.pitchVelocity *= this.dampingFactor;
 
-        // --- Handle panning ---
-        if (this.panLeft) this.applyPan(-1, 0, this.keyPanSpeed);
-        if (this.panRight) this.applyPan(1, 0, this.keyPanSpeed);
-        if (this.panUp) this.applyPan(0, -1, this.keyPanSpeed);
-        if (this.panDown) this.applyPan(0, 1, this.keyPanSpeed);
-
-        // --- Compute dynamic orbit center ---
+        // --- Dynamic target position ---
         const center = new THREE.Vector3();
         if (this.focusTarget instanceof THREE.Object3D) {
             this.focusTarget.getWorldPosition(center);
@@ -478,15 +499,29 @@ export class CameraController {
 
         // --- Camera position in spherical coordinates ---
         const offset = new THREE.Vector3(
-            this.distance * Math.sin(this.yaw) * Math.cos(this.pitch),
+            this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
             this.distance * Math.sin(this.pitch),
-            this.distance * Math.cos(this.yaw) * Math.cos(this.pitch)
+            this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
         );
         this.camera.position.copy(center.clone().add(offset));
 
-        this.camera.lookAt(center);
-    }
+        // --- Look-ahead point ---
+        const lookOffset = new THREE.Vector3(
+            this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.sin(this.yaw),
+            this.lookAheadDistance * Math.sin(this.pitch + this.lookAheadTilt),
+            this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.cos(this.yaw)
+        );
+        const lookTarget = center.clone().add(lookOffset);
 
+        // --- Dynamic up vector (same as flight) ---
+        const forward = new THREE.Vector3().subVectors(lookTarget, this.camera.position).normalize();
+        let right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+        if (right.lengthSq() < 0.0001) right.set(1, 0, 0);
+        const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+
+        this.camera.up.copy(up);
+        this.camera.lookAt(lookTarget);
+    }
 
     updateFPS(deltaTime) {        
         // Forward/right movement vectors
@@ -509,23 +544,30 @@ export class CameraController {
         this.camera.position.add(move);
     }
 
+    // add zoom
     updateFlight(deltaTime) {
         const keyOrbitSpeed = 1.0 * this.lookSpeed;
-
-        // --- Update velocities from key input ---
-        if (this.flightLeft) this.yawVelocity -= keyOrbitSpeed * deltaTime;
-        if (this.flightRight) this.yawVelocity += keyOrbitSpeed * deltaTime;
-        if (this.flightForward) this.pitchVelocity -= keyOrbitSpeed * deltaTime;
+        const keyZoomSpeed  = 0.01 * this.zoomSpeed; 
+        
+        // --- Update angular velocities from key input ---
+        if (this.flightLeft)  this.yawVelocity  -= keyOrbitSpeed * deltaTime;
+        if (this.flightRight) this.yawVelocity  += keyOrbitSpeed * deltaTime;
+        if (this.flightForward)  this.pitchVelocity -= keyOrbitSpeed * deltaTime;
         if (this.flightBackward) this.pitchVelocity += keyOrbitSpeed * deltaTime;
 
+        // --- Integrate angles ---
         this.yaw += this.yawVelocity;
         this.pitch += this.pitchVelocity;
-        this.pitch = THREE.MathUtils.clamp(this.pitch, this.minOrbitPitch, this.maxOrbitPitch);
 
-        this.yawVelocity *= this.dampingFactor;
+        // --- Damping ---
+        this.yawVelocity   *= this.dampingFactor;
         this.pitchVelocity *= this.dampingFactor;
 
-        // --- Compute dynamic orbit center ---
+        // --- Zoom control (e.g. Q = zoom in, E = zoom out) ---
+        if (this.flightUp)  this.distance -= keyZoomSpeed * deltaTime * this.distance;
+        if (this.flightDown) this.distance += keyZoomSpeed * deltaTime * this.distance;
+
+        // --- Compute center (planet or focus target) ---
         const center = new THREE.Vector3();
         if (this.focusTarget instanceof THREE.Object3D) {
             this.focusTarget.getWorldPosition(center);
@@ -534,21 +576,28 @@ export class CameraController {
         }
         center.add(this._focusPanOffset);
 
-        // --- Camera position in spherical coordinates ---
+        // --- Camera position (spherical coordinates, same as Option 2) ---
         const offset = new THREE.Vector3(
             this.distance * Math.cos(this.pitch) * Math.sin(this.yaw),
             this.distance * Math.sin(this.pitch),
             this.distance * Math.cos(this.pitch) * Math.cos(this.yaw)
         );
-        this.camera.position.copy(center.clone().add(offset));
+        const camPos = center.clone().add(offset);
+        this.camera.position.copy(camPos);
 
-        // --- Look-ahead point moves with orbit center ---
+        // --- Planet-based up vector ---
+        const up = camPos.clone().sub(center).normalize();
+        this.camera.up.copy(up);
+
+        // --- Look-ahead target (same as Option 2) ---
         const lookOffset = new THREE.Vector3(
             this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.sin(this.yaw),
             this.lookAheadDistance * Math.sin(this.pitch + this.lookAheadTilt),
             this.lookAheadDistance * Math.cos(this.pitch + this.lookAheadTilt) * Math.cos(this.yaw)
         );
         const lookTarget = center.clone().add(lookOffset);
+
+        // --- Orient camera ---
         this.camera.lookAt(lookTarget);
     }
 
