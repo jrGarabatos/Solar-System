@@ -1,86 +1,12 @@
 import * as THREE from 'three';
 import { CameraController } from './cameraController.js';
+import { PlanetWithDecorations } from './PlanetWithDecorations.js';
 import { Planet } from './Planet.js';
+import { TreeFactory } from './TreeFactory.js';
 
 class SolarSystemApp {
 
     planets = [];
-
-    solarSystemData = {
-    sun: { 
-        name: "Sun", 
-        radius: 696,    // 696,340 km
-        order: 5 
-    },
-    mercury: { 
-        name: "Mercury", 
-        radius: 2.44,   // 2,440 km
-        order: 3 
-    },
-    venus: { 
-        name: "Venus", 
-        radius: 6.05,   // 6,052 km
-        order: 3 
-    },
-    earth: { 
-        name: "Earth", 
-        radius: 6.37,   // 6,371 km
-        order: 4,
-        moons: [
-        { 
-            name: "Moon", 
-            radius: 1.74,  // 1,737 km
-            order: 3 
-        }
-        ]
-    },
-    mars: { 
-        name: "Mars", 
-        radius: 3.39,   // 3,389 km
-        order: 3,
-        moons: [
-        { name: "Phobos", radius: 0.011, order: 2 }, // 11 km
-        { name: "Deimos", radius: 0.006, order: 2 }  // 6 km
-        ]
-    },
-    jupiter: { 
-        name: "Jupiter", 
-        radius: 69.9,   // 69,911 km
-        order: 5,
-        moons: [
-        { name: "Io", radius: 1.82, order: 3 },
-        { name: "Europa", radius: 1.56, order: 3 },
-        { name: "Ganymede", radius: 2.63, order: 3 },
-        { name: "Callisto", radius: 2.41, order: 3 }
-        ]
-    },
-    saturn: { 
-        name: "Saturn", 
-        radius: 58.2,   // 58,232 km
-        order: 5,
-        moons: [
-        { name: "Titan", radius: 2.57, order: 3 },
-        { name: "Enceladus", radius: 0.25, order: 2 }
-        ]
-    },
-    uranus: { 
-        name: "Uranus", 
-        radius: 25.4,   // 25,362 km
-        order: 4,
-        moons: [
-        { name: "Titania", radius: 0.79, order: 2 },
-        { name: "Oberon", radius: 0.76, order: 2 }
-        ]
-    },
-    neptune: { 
-        name: "Neptune", 
-        radius: 24.6,   // 24,622 km
-        order: 4,
-        moons: [
-        { name: "Triton", radius: 1.35, order: 3 }
-        ]
-    }
-    };
 
     constructor() {
         console.log('initialized');
@@ -90,7 +16,7 @@ class SolarSystemApp {
 
         // DOM elements for loading indicator, projection image, and container for the 3D scene
         this.loading = document.getElementById('loading');
-        this.sceneWindow = document.getElementById('scene');
+        //this.sceneWindow = document.getElementById('scene');
 
         // resize
         window.addEventListener('resize', () => this.onResize());
@@ -186,7 +112,7 @@ class SolarSystemApp {
             panSpeed: 50, //0.2,
             zoomSpeed: 50, //0.2,
             toggleKey: 'KeyC', // press 'C' to toggle between camera orbit modes
-            minOrbitPitch: THREE.MathUtils.degToRad(-55),
+            minOrbitPitch: THREE.MathUtils.degToRad(-85),
             maxOrbitPitch: THREE.MathUtils.degToRad(75),
             maxOrbitDistance: 5000,
         });
@@ -195,9 +121,11 @@ class SolarSystemApp {
     }
 
     setUpPlanets() {
+
         // Build planets
         const sun = new Planet({
             name: "Sun",
+            textureImg: document.getElementById("sunProjection"),
             radius: 20,
             orbitRadius: 0, // fixed in center
             orbitSpeed: 0,
@@ -258,8 +186,9 @@ class SolarSystemApp {
                 ]
             }
         });
-    
-        const earth = new Planet({
+     
+        
+        const earth = new PlanetWithDecorations({
             name: "Earth",
             textureImg: document.getElementById("earthProjection"),
             radius: 8,
@@ -269,8 +198,8 @@ class SolarSystemApp {
             parentPlanet: sun,
             scene: this.scene,
             detail: { low: 5, mid: 25, high: 50 },
-            lodDistances: { low: 5, mid: 2 },
-            heightScale: 0.5,
+            lodDistances: { low: 5, mid: 2.5 },
+            heightScale: 0.2,
             colorConfig: {
                 gradient: [
                     { height: -1.0, color: new THREE.Color(0x000033) }, // deep ocean
@@ -279,9 +208,68 @@ class SolarSystemApp {
                     { height:  0.5, color: new THREE.Color(0x8b4513) }, // mountains brown
                     { height:  1.0, color: new THREE.Color(0xffffff) }, // snowcaps
                 ]
-            }
+            },
+            freezedPole: true,
         });
         
+        earth.registerDecoration('trees', {
+            heightRange: [0.0, 0.8],        // only spawn between 0–80% of max terrain height
+            density: 0.5,                   // fraction of tiles that get a tree
+            heightOffset: 0.0,              // at surface
+            clusterSize: [4, 8],            // trees per cluster
+            clusterRadius: 0.08,            // spread of trees in cluster
+
+            types: [
+                { type: 'round',     scale: 0.2 },
+                { type: 'pine',      scale: 0.2 },
+                { type: 'bushy',     scale: 0.2 },
+                { type: 'snowyPine', scale: 0.2 },
+                //{ type: 'palm',      scale: 0.0075, path: './models/scene.gltf',     meshNames: ['Object_192', 'Object_193'] },
+                { type: 'palm',      scale: 0.0075, path: './models/scene.gltf',     meshIndices: [106, 107] },
+            ],
+            
+            // Pick tree type based on height/latitude
+            typeSelector: (h, lat) => {
+                const absLat = Math.abs(lat);
+                const latFactor = absLat / 90;
+                const heightFactor = THREE.MathUtils.clamp(h * 5, 0, 1);
+                const temperature = THREE.MathUtils.clamp(1 - (0.7 * latFactor + 0.3 * heightFactor), 0, 1);
+        
+                if (temperature > 0.2 && temperature < 0.5) return h > 0.05 ? 'snowyPine' : null;
+                if (temperature > 0.55 && temperature < 0.7) return h < 0.05 ? 'pine' : null;
+                if (temperature > 0.7 && temperature < 0.8) return h < 0.05 ? 'round' : h < 0.07 ? 'bushy' : null;
+                if (temperature > 0.8 && temperature < 0.9) return h < 0.05 ? 'bushy' : h < 0.07 ? 'round' : null;
+                if (temperature >= 0.9) {
+                    if (h < 0.03) return 'palm';
+                    if (h < 0.06) return 'bushy';
+                    if (h < 0.09) return 'round';
+                }
+                return null;
+            },
+            proceduralFactory: (type, scale) => TreeFactory.createBase(type, scale),  // Use the procedural TreeFactory
+            compatibility: { shareableWith: ['clouds'] } // optional
+        });
+
+        earth.registerDecoration('clouds', {
+            heightRange: [-1.0, 1.0],
+            density: 0.025,
+            heightOffset: .5, // floats above surface
+            clusterSize: [0, 1],
+            clusterRadius: 1,
+            types: [
+                { type: 'cloud1',  scale: 0.01, path: './models/scene.gltf', meshNames: ['Object_64'] },
+                { type: 'cloud2',  scale: 0.01, path: './models/scene.gltf', meshNames: ['Object_52'] },
+                { type: 'cloud3',  scale: 0.01, path: './models/scene.gltf', meshNames: ['Object_76'] },
+            ],
+            typeSelector: () => { 
+                const clouds = ['cloud1', 'cloud2', 'cloud3'];    
+                // Select a random element
+                return clouds[Math.floor(Math.random() * clouds.length)];
+            },
+            compatibility: { shareableWith: ['clouds'] } // clouds don’t mix
+            //compatibility: { exclusive: true } // clouds don’t mix
+        });
+
         earth.addMoon({
             name: "Moon",
             textureImg: document.getElementById("moonProjection"),
@@ -369,6 +357,7 @@ class SolarSystemApp {
 
         const uranus = new Planet({
             name: "Uranus",
+            textureImg: document.getElementById("uranusProjection"),
             radius: 11,
             orbitRadius: 450,
             orbitSpeed: 0.002,
@@ -377,17 +366,19 @@ class SolarSystemApp {
             scene: this.scene,
             detail: { low: 5, mid: 25, high: 75 },
             lodDistances: { low: 5, mid: 2 },
-            heightScale: 0.1,
+            heightScale: 0.5,
             colorConfig: {
                 gradient: [
-                { height: -1.0, color: new THREE.Color(0x48d1cc) }, // teal
-                { height:  1.0, color: new THREE.Color(0x00ffff) }  // cyan
+                    //{ height: 0.0, color: new THREE.Color('red') }, // teal
+                    { height: -0.2, color: new THREE.Color(0x48d1cc) }, // teal
+                    { height: 0.2, color: new THREE.Color(0x00ffff) }  // cyan
                 ]
             }
         });
 
         const neptune = new Planet({
             name: "Neptune",
+            textureImg: document.getElementById("neptuneProjection"),
             radius: 11,
             orbitRadius: 550,
             orbitSpeed: 0.0015,
@@ -396,7 +387,7 @@ class SolarSystemApp {
             scene: this.scene,
             detail: { low: 5, mid: 25, high: 75 },
             lodDistances: { low: 5, mid: 2 },
-            heightScale: 0.1,
+            heightScale: 0.5,
             colorConfig: {
                 gradient: [
                 { height: -1.0, color: new THREE.Color(0x000080) }, // navy
@@ -407,6 +398,7 @@ class SolarSystemApp {
 
         const pluto = new Planet({
             name: "Pluto",
+            textureImg: document.getElementById("plutoProjection"),
             radius: 3,
             orbitRadius: 650,
             orbitSpeed: 0.001,
@@ -571,8 +563,11 @@ class SolarSystemApp {
             }
         });
 
-        this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, neptune, pluto, uranus);     
+
+        this.planets.push(sun, mercury, venus, earth, mars, jupiter, saturn, uranus, neptune, pluto);     
+
     }
+
 
     /**
      * Starts the animation loop using requestAnimationFrame.
@@ -674,8 +669,6 @@ window.addEventListener('load', () => {
         });
     }
 });
-
-
 
 
 
