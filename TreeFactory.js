@@ -10,7 +10,8 @@ export class TreeFactory {
      * @param {'round'|'pine'|'bushy'|'palm'} type 
      * @param {number} scale - overall scale multiplier for tree size
      */
-    static createBase(type = 'round', scale = 1) {
+    static createBase(type = 'round', scale = 0.5) {
+
         let trunkGeo, trunkMat, leavesGeo, leavesMat;
 
         // === Common Trunk Material ===
@@ -31,7 +32,7 @@ export class TreeFactory {
 
             /* 🌲 Pine Tree */
             case 'pine': {
-                trunkGeo = new THREE.CylinderGeometry(0.05, 0.1, 0.6 * scale, 6);
+                trunkGeo = new THREE.CylinderGeometry(0.05 * scale, 0.1 * scale, 0.6 * scale, 6);
                 trunkGeo.translate(0, 0.3 * scale, 0);
 
                 const leaves = [];
@@ -52,7 +53,7 @@ export class TreeFactory {
 
             /* 🌿 Bushy Tree */
             case 'bushy': {
-                trunkGeo = new THREE.CylinderGeometry(0.07, 0.12, 0.4 * scale, 6);
+                trunkGeo = new THREE.CylinderGeometry(0.07 * scale, 0.12 * scale, 0.4 * scale, 6);
                 trunkGeo.translate(0, 0.2 * scale, 0);
 
                 const leaves = [];
@@ -185,13 +186,13 @@ export class TreeFactory {
                 });
 
                 return {
-                    trunk: { geometry: trunkGeo, material: trunkMat },
-                    leaves: { geometry: leavesGeo, material: leavesMat },
+                    trunk: { geometry: trunkGeo, material: trunkMat, partName: 'trunk' },
+                    leaves: { geometry: leavesGeo, material: leavesMat, partName: 'leaves' },
                 };
             }
 
             case 'snowyPine': {
-                const trunkHeight = 1.25 * scale;
+                const trunkHeight = 1 * scale;
                 const trunkRadiusTop = 0.05 * scale;
                 const trunkRadiusBottom = 0.12 * scale;
 
@@ -211,7 +212,7 @@ export class TreeFactory {
                     const g = new THREE.ConeGeometry(radius * scale, height * scale, 8, 1, true);
 
                     // Place each cone along trunk
-                    const yOffset = 0.3 + i * 0.25;
+                    const yOffset = 0.5 + i * 0.25;
                     g.translate(0, yOffset * scale, 0);
 
                     // Slight droop for snow weight
@@ -241,7 +242,8 @@ export class TreeFactory {
 
             /* 🍃 Round Tree (default) */
             default: {
-                trunkGeo = new THREE.CylinderGeometry(0.07, 0.12, 0.4 * scale, 6);
+
+                trunkGeo = new THREE.CylinderGeometry(0.07 * scale, 0.12 * scale, 0.4 * scale, 6);
                 trunkGeo.translate(0, 0.2 * scale, 0);
 
                 const leaves = [];
@@ -261,8 +263,8 @@ export class TreeFactory {
         }
 
         return {
-            trunk: { geometry: trunkGeo, material: trunkMat },
-            leaves: { geometry: leavesGeo, material: leavesMat }
+            trunk: { geometry: trunkGeo, material: trunkMat, partName: 'trunk' },
+            leaves: { geometry: leavesGeo, material: leavesMat, partName: 'leaves' }
         };
     }
 }
