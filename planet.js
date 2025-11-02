@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { hexasphere } from './hexasphere_9.js';
-import { Rings } from './ring_4.js';
+import { hexasphere } from './hexasphere.js';
+import { Rings } from './ring.js';
 
 
 export class Planet {
