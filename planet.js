@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { hexasphere } from './hexasphere.js';
+import { hexasphere } from './hexasphere_9.js';
+import { Rings } from './ring_4.js';
+
 
 export class Planet {
 
@@ -18,8 +20,10 @@ export class Planet {
      * @param {Object} options.lodDistances - Distances for switching LOD {low, mid}
      * @param {Object} options.colorConfig - colors to be used in the planet at each altitude
      * @param {number} options.heightScale - multiplier for terrain displacement
+     * @param {number} options.freezedPole - flag for a freezed pole
      */
-    constructor({ name, textureImg, radius, orbitRadius, orbitSpeed, orbitAngle, parentPlanet, scene, detail, lodDistances, heightScale, colorConfig }) {
+    constructor({ name, textureImg, radius, orbitRadius, orbitSpeed, orbitAngle, parentPlanet, 
+                  scene, detail, lodDistances, heightScale, colorConfig, freezedPole = false }) {
         // Basic properties
         console.log(name);
         this.name = name;
@@ -34,6 +38,7 @@ export class Planet {
                 { height:  1.0, color: new THREE.Color(0xffffff) }, // highest peaks → white
             ]
         }, colorConfig || {});
+        this.freezedPole = freezedPole;
 
         // Orbital properties
         this.parentPlanet = parentPlanet; 
@@ -45,6 +50,9 @@ export class Planet {
         // Allow the presence of moons
         this.moons = [];
 
+        // Allow the presence of rings (if any)
+        this.rings = [];
+    
         // Reusable dummy object for instancing transforms        
         this._dummy = new THREE.Object3D();
         
@@ -76,16 +84,43 @@ export class Planet {
         //scene
         this.scene = scene;
 
-        // Group that will hold this planet
-        this.group = new THREE.Group();
-    
-        // Add all LOD groups to the wrapper group (we’ll toggle visibility)
+        // --- Create a planet group that holds all LOD meshes ---
+        this.planetGroup = new THREE.Group();
+
+        /*
+        // --- Add a debug point at true center of planet ---
+        const debugGeom = new THREE.SphereGeometry(0.05, 18, 18);
+        const debugMat = new THREE.MeshBasicMaterial({ color: "red" });
+        const debugPoint = new THREE.Mesh(debugGeom, debugMat);
+        debugPoint.position.set(0, 0, 0); // always true center
+        this.planetGroup.add(debugPoint);
+        */
+
+        // Add LODs to the  
         Object.values(this.lodGroups).forEach(g => {
-            g.visible = false;
-            this.group.add(g)
+            g.visible = false;       // start invisible, we'll toggle LOD
+            this.planetGroup.add(g);
         });
-    
-        // Start with low detail
+
+        // --- Create orbit group that will handle orbital motion ---
+        this.orbitGroup = new THREE.Group();
+        this.orbitGroup.add(this.planetGroup);
+
+        // --- Set initial orbit position relative to parent or origin ---
+        let center = new THREE.Vector3(0, 0, 0);
+        if (this.parentPlanet) {
+            center.copy(this.parentPlanet.orbitGroup.position);
+        }
+        this.orbitGroup.position.set(
+            center.x + Math.cos(this.orbitAngle) * this.orbitRadius,
+            0,
+            center.z + Math.sin(this.orbitAngle) * this.orbitRadius
+        );
+
+        // --- Add orbit group to the scene ---
+        this.scene.add(this.orbitGroup);
+
+        // --- Activate initial LOD ---
         this.setActiveLOD("low");
 
         // Apply initial orbit position
@@ -99,18 +134,6 @@ export class Planet {
 
         this.scaledLow  = this.lodDistances.low * this.radius;
         this.scaledMid  = this.lodDistances.mid * this.radius;
-
-        // Initial placement relative to parent or origin
-        const center = this.parentPlanet ? this.parentPlanet.group.position : { x: 0, z: 0 };
-        this.group.position.set(
-            center.x + Math.cos(this.orbitAngle) * this.orbitRadius,
-            0,
-            center.z + Math.sin(this.orbitAngle) * this.orbitRadius
-        );
-    
-        // Add wrapper group to the scene
-        this.scene.add(this.group); 
-
     }
 
     addMoon(moonConfig) {
@@ -123,6 +146,19 @@ export class Planet {
         return moon;
     }
 
+     /**
+     * Attach a ring system to this planet.
+     * @param {Object} config - Ring configuration (passed to Rings class)
+     */
+    addRings(config = {}) {
+        const ring = new Rings({ 
+            planet: this, 
+            ...config });
+        this.rings.push(ring);
+        return ring;
+    }
+
+
     /**
      * Builds a THREE.Group containing instanced tile meshes for a given geosphere LOD.
      * - Groups faces by polygon type (pentagon, hexagon, etc.) so they can share geometry/material.
@@ -130,35 +166,30 @@ export class Planet {
      * @param {hexasphere} geosphere - Hexasphere instance (already subdivided to desired LOD)
      * @returns {THREE.Group} Group containing instanced meshes, ready to be added to the scene.
      */
-    buildLODGroup_1(geosphere) {
+
+    buildLODGroup(geosphere) {
         const group = new THREE.Group();
 
-        //compute dual polyhedron
-        const dualFaces = geosphere.dualFaces;                               // Array of face indices (each face is an array of vertex indices)
-        const dualVertices = Planet.toVectorArray(geosphere.dualVertices); // Vertex positions in [x, y, z] arrays
+        // --- Dual polyhedron data ---
+        const dualFaces = geosphere.dualFaces;               // Array of face indices (each face is an array of vertex indices)
+        const dualVertices = Planet.toVectorArray(geosphere.dualVertices); // Vertex positions [x, y, z]
 
-        // DICTIONARY OF TILES (per sides, height)
-        const tileGroups = {};  // key: `${sides}`
-
-        // build a dictionary of tiles per sides -> collect faces by polygon side count
+        // --- Collect tiles by polygon side count ---
+        const tileGroups = {};  
         for (let i = 0; i < dualFaces.length; i++) {
             const face = dualFaces[i];
             const sides = face.length;
             const key = `${sides}`;
-
             if (!tileGroups[key]) tileGroups[key] = [];
             tileGroups[key].push(i);
         }
 
-        // For each polygon type, create instanced mesh
+        // --- Build instanced meshes for each polygon type ---
         for (const key in tileGroups) {
             const sides = parseInt(key);
             const indices = tileGroups[key];
 
-            // Create or reuse cached geometry for polygon shape
             const geometry = this.createTileGeometry(sides, 1, 1);
-
-            // Material with vertex colors enabled
             const material = new THREE.MeshStandardMaterial({
                 flatShading: true,
                 side: THREE.DoubleSide,
@@ -172,13 +203,15 @@ export class Planet {
                 const face = dualFaces[faceIndex];
                 const tileVertices = face.map(idx => dualVertices[idx]);
 
-                // --- Compute spherical center ---
+                // --- Tile center ---
                 const center = Planet.avg(tileVertices);
 
-                // --- Compute radius from spherical geometry ---
-                const radius = tileVertices.reduce((sum, v) => sum + Math.hypot(...v.map((c, j) => c - center[j])), 0) / sides;
-                
-                // --- Compute normal and rotation matrix for spherical tile ---
+                // --- Radius from geometry ---
+                const radius = tileVertices.reduce((sum, v) =>
+                    sum + Math.hypot(...v.map((c, j) => c - center[j])), 0
+                ) / sides;
+
+                // --- Normal + local frame ---
                 const normal = Planet.normalize(center);
                 const edgeVec = [
                     tileVertices[0][0] - center[0],
@@ -191,8 +224,6 @@ export class Planet {
                     edgeVec[1] - dot * normal[1],
                     edgeVec[2] - dot * normal[2]
                 ];
-                        
-                // center & local frame
                 const xAxis = Planet.normalize(proj);
                 const zAxis = normal;
                 const yAxis = Planet.cross(zAxis, xAxis);
@@ -203,23 +234,30 @@ export class Planet {
                     new THREE.Vector3(...zAxis)
                 );
 
-                // --- Determine height ---
+                // --- Height from texture ---
                 const latLon = Planet.cartesianToLatLonDegrees(center);
                 const brightness = this.textureImg ? this.brightness(latLon[0], latLon[1]) : 1;
                 const minHeight = -1;
                 const maxHeight = 1;
                 const height = minHeight + (maxHeight - minHeight) * brightness;
 
-                // --- Apply scale (radius in X/Y, height in Z) ---
+                // --- Apply scaling ---
                 const scalingMatrix = new THREE.Matrix4().makeScale(radius, radius, height * this.heightScale);
                 sphereMatrix.multiply(scalingMatrix);
                 sphereMatrix.setPosition(...center);
-                
-                // --- Color based on height and land/water ---
-                const color = this.getColorForHeight(height);
-                instancedMesh.setColorAt(i, color);
 
-                // --- Setup spherical matrix on instanced mesh ---
+                
+                // --- Color ---
+                if (this.freezedPole) {
+                    const color = this.getColorForHeightLatitude(height, latLon[0]);
+                    instancedMesh.setColorAt(i, color);
+                }
+                else {
+                    const color = this.getColorForHeight(height);
+                    instancedMesh.setColorAt(i, color);
+                }
+                
+                // --- Apply transform ---
                 this._dummy.matrixAutoUpdate = false;
                 this._dummy.matrix.copy(sphereMatrix);
                 this._dummy.rotation.setFromRotationMatrix(sphereMatrix);
@@ -228,126 +266,18 @@ export class Planet {
                 this.tileData.push({
                     instanceIndex: i,
                     mesh: instancedMesh,
+                    center: center,
+                    height: height * this.heightScale
                 });
             }
 
             instancedMesh.instanceMatrix.needsUpdate = true;
             instancedMesh.instanceColor.needsUpdate = true;
             group.add(instancedMesh);
-
         }
 
         return group;
     }
-
-    buildLODGroup(geosphere) {
-        const group = new THREE.Group();
-
-        // Optional debug: red point at planet center
-        const debugCenter = new THREE.Mesh(
-            new THREE.SphereGeometry(0.05, 8, 8),
-            new THREE.MeshBasicMaterial({ color: 0xff0000 })
-        );
-        group.add(debugCenter);
-
-        //compute dual polyhedron
-        const dualFaces = geosphere.dualFaces;
-        const dualVertices = Planet.toVectorArray(geosphere.dualVertices);
-
-        // DICTIONARY OF TILES (per sides, height)
-        const tileGroups = {};  // key: `${sides}`
-
-        for (let i = 0; i < dualFaces.length; i++) {
-            const face = dualFaces[i];
-            const sides = face.length;
-            const key = `${sides}`;
-
-            if (!tileGroups[key]) tileGroups[key] = [];
-            tileGroups[key].push(i);
-        }
-
-        // For each polygon type, create instanced mesh
-        for (const key in tileGroups) {
-            const sides = parseInt(key);
-            const indices = tileGroups[key];
-
-            // Create or reuse cached geometry for polygon shape
-            const geometry = this.createTileGeometry(sides, 1, 1);
-
-            // Material with vertex colors enabled
-            const material = new THREE.MeshStandardMaterial({
-                flatShading: true,
-                side: THREE.DoubleSide,
-                vertexColors: false
-            });
-
-            const instancedMesh = new THREE.InstancedMesh(geometry, material, indices.length);
-
-            for (let i = 0; i < indices.length; i++) {
-                const faceIndex = indices[i];
-                const face = dualFaces[faceIndex];
-                const tileVertices = face.map(idx => dualVertices[idx]);
-
-                // Compute center relative to planet origin
-                const center = Planet.avg(tileVertices);
-
-                // Approximate radius
-                const radius = tileVertices.reduce((sum, v) => sum + Math.hypot(...v.map((c, j) => c - center[j])), 0) / sides;
-
-                // Compute normal frame
-                const normal = Planet.normalize(center);
-                const edgeVec = [
-                    tileVertices[0][0] - center[0],
-                    tileVertices[0][1] - center[1],
-                    tileVertices[0][2] - center[2]
-                ];
-                const dot = edgeVec[0]*normal[0] + edgeVec[1]*normal[1] + edgeVec[2]*normal[2];
-                const proj = [
-                    edgeVec[0] - dot*normal[0],
-                    edgeVec[1] - dot*normal[1],
-                    edgeVec[2] - dot*normal[2]
-                ];
-
-                const xAxis = Planet.normalize(proj);
-                const zAxis = normal;
-                const yAxis = Planet.cross(zAxis, xAxis);
-
-                const sphereMatrix = new THREE.Matrix4().makeBasis(
-                    new THREE.Vector3(...xAxis),
-                    new THREE.Vector3(...yAxis),
-                    new THREE.Vector3(...zAxis)
-                );
-
-                // Height from texture
-                const latLon = Planet.cartesianToLatLonDegrees(center);
-                const brightness = this.textureImg ? this.brightness(latLon[0], latLon[1]) : 1;
-                const height = (-1 + (1 + 1) * brightness) * this.heightScale; // scale height
-
-                const scalingMatrix = new THREE.Matrix4().makeScale(radius, radius, height);
-                sphereMatrix.multiply(scalingMatrix);
-
-                // **Important**: set position to origin → tiles are local to planet center
-                sphereMatrix.setPosition(0,0,0);
-
-                const color = this.getColorForHeight(height);
-                instancedMesh.setColorAt(i, color);
-
-                this._dummy.matrixAutoUpdate = false;
-                this._dummy.matrix.copy(sphereMatrix);
-                this._dummy.rotation.setFromRotationMatrix(sphereMatrix);
-                instancedMesh.setMatrixAt(i, this._dummy.matrix);
-
-                this.tileData.push({ instanceIndex: i, mesh: instancedMesh });
-            }
-
-            instancedMesh.instanceMatrix.needsUpdate = true;
-            instancedMesh.instanceColor.needsUpdate = true;
-            group.add(instancedMesh);
-        }
-
-        return group;
-    }
-
 
     /**
      * Creates (and caches) a polygon geometry for a tile face.
@@ -411,18 +341,27 @@ export class Planet {
         }
     }
 
+    getColorForHeightLatitude(height, lat) {
+        const baseColor = this.getColorForHeight(height); // existing gradient
+        const absLat = Math.abs(lat);
+        if (absLat > 75) return new THREE.Color(0xffffff).lerp(baseColor, 0.2); // snowy tint
+        if (absLat > 68) return new THREE.Color(0xb0c4de).lerp(baseColor, 0.2); // cold bluish tint
+        if (absLat > 58) return new THREE.Color(0xb0c4de).lerp(baseColor, 0.4); // cold bluish tint
+        return baseColor;
+    }
+
     // === Orbit ====
     updateOrbit() {
         this.orbitAngle += this.orbitSpeed;
 
-        //or bit around the sun at position 0,0,0
+        //orbit around the sun at position 0,0,0
         let centerX = 0;
         let centerZ = 0;
 
         if (this.parentPlanet) {
             // orbit around parent planet
-            centerX = this.parentPlanet.group.position.x;
-            centerZ = this.parentPlanet.group.position.z;
+            centerX = this.parentPlanet.orbitGroup.position.x;
+            centerZ = this.parentPlanet.orbitGroup.position.z;
         }
 
         this.position.set(
@@ -431,12 +370,14 @@ export class Planet {
             centerZ + Math.sin(this.orbitAngle) * this.orbitRadius
         );
 
-        this.group.position.copy(this.position);
+        this.orbitGroup.position.copy(this.position);
 
         // Update moons
         this.moons.forEach(moon => moon.updateOrbit());
-    }
 
+        // Update rings if present
+        this.rings.forEach(ring => ring.updateOrbit());
+    }
 
     // === LOD Helpers ===
     updateLOD(camera) {
@@ -445,20 +386,20 @@ export class Planet {
        
         // Update moons
         this.moons.forEach(moon => moon.updateLOD(camera));
+
+        // Update rings if present
+        this.rings.forEach(ring => ring.updateLOD(camera));
     }
 
     /**
      * Sets the active LOD group to be visible in the scene, removing previous.
      * @param {'low'|'mid'|'high'} lodName
      */
-    setActiveLOD(lodName) {
+    async setActiveLOD(lodName) {
         if (this.currentLOD === lodName) return;
     
         if (this.currentLOD) this.lodGroups[this.currentLOD].visible = false;
     
-        //console.log("Switching LOD to:", lodName);
-        //console.log("Old LOD visibility:", this.lodGroups[this.currentLOD]? this.lodGroups[this.currentLOD].visible : undefined);
-
         this.lodGroups[lodName].visible = true;
         this.currentLOD = lodName;
     }
@@ -564,28 +505,6 @@ export class Planet {
         return data[idx] / 255; // red channel
     }
 
-    /**
-     * Get brightness (0..1) from texture at given latitude/longitude in degrees
-     */
-    brightness_1(latDeg, lonDeg) {
-        if (!this.pixelData) return 1;
-
-        // Convert lat/lon to [0,1] texture coordinates
-        const u = (lonDeg + 180) / 360;
-        const v = 1 - ((latDeg + 90) / 180); // flip vertically
-
-        // Map to pixel coordinates
-        const x = Math.floor(u * (this.pixelWidth - 1));
-        const y = Math.floor(v * (this.pixelHeight - 1));
-
-        const idx = (y * this.pixelWidth + x) * 4;
-        const r = this.pixelData[idx] / 255;
-        const g = this.pixelData[idx + 1] / 255;
-        const b = this.pixelData[idx + 2] / 255;
-
-        // Simple brightness as average of RGB
-        return (r + g + b) / 3;
-    }
 
     // === STATIC HELPERS ===
 
@@ -666,6 +585,7 @@ export class Planet {
         const y = v.y !== undefined ? v.y : v[1];
         const z = v.z !== undefined ? v.z : v[2];
 
+        
         // Radius (magnitude of the vector)
         const r = Math.sqrt(x * x + y * y + z * z);
         if (r === 0) return [0, 0]; // avoid division by zero
@@ -679,6 +599,7 @@ export class Planet {
         // Normalize longitude to [-180, 180]
         if (lon > 180) lon -= 360;
         if (lon < -180) lon += 360;
+
 
         return [lat, lon];
     }
